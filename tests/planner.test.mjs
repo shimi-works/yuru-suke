@@ -267,6 +267,24 @@ const TODAY = "2026-07-13"; // 月曜
   const partial = store.migrate({ version: 1, tasks: [task("t1", 60)] });
   check("欠損フィールドを補完", !!(partial.capacity && partial.capacity.weekly && partial.settings && partial.semester));
 
+  // 信頼できない入力の無害化（インポート経由XSS・クラッシュの回帰テスト）
+  const dirty = store.migrate({
+    subjects: [{ id: "s1", name: "A", color: 'x"><img src=x onerror=alert(1)>' }],
+    milestones: [{ id: "m1", subjectId: "s1", title: "T", date: "2026-08-01", kind: '"><script>x</script>' }],
+    capacity: { weekly: { mon: "<img>" }, overrides: { "not-a-date": 60, "2026-07-20": "90" } },
+    settings: { dayBoundaryHour: "bad", geminiModel: "evil/../model" },
+  });
+  check("不正colorは既定色に", /^#[0-9a-fA-F]{3,8}$/.test(dirty.subjects[0].color), dirty.subjects[0].color);
+  check("不正kindは既定に", dirty.milestones[0].kind === "exam", dirty.milestones[0].kind);
+  check("weeklyは数値化", typeof dirty.capacity.weekly.mon === "number");
+  check("不正な日付キーのoverridesは捨てる", !("not-a-date" in dirty.capacity.overrides));
+  check("overrides値は数値化", dirty.capacity.overrides["2026-07-20"] === 90);
+  check("不正dayBoundaryHourは既定3に", dirty.settings.dayBoundaryHour === 3);
+  check("不正geminiModelは既定に", store.GEMINI_MODELS.includes(dirty.settings.geminiModel), dirty.settings.geminiModel);
+  // 汚染されたdayBoundaryHourでもplanが例外を投げない（正規化後なので当然通る）
+  const p = planner.plan(dirty, planner.effectiveToday(new Date(2026, 6, 13, 12, 0), dirty.settings.dayBoundaryHour));
+  check("正規化後のplanは例外なし", !!p && typeof p.assignments === "object");
+
   let threw = false;
   try { store.importJSON("{not json"); } catch { threw = true; }
   check("壊れたJSONはthrow", threw);
@@ -301,11 +319,18 @@ const TODAY = "2026-07-13"; // 月曜
   const bad3 = advisorValidate({ advice: "x", capacityChanges: [{ date: "2026-07-14", minutes: 99999 }], taskChanges: [] }, st, TODAY);
   check("分数の範囲外を拒否", !bad3.ok);
 
+  // 完了状態の書き換え指示は変更として一切生成されない（事実の改変不可）
   const bad4 = advisorValidate({ advice: "x", capacityChanges: [], taskChanges: [{ taskId: "t1", done: true }] }, st, TODAY);
-  check("完了状態の書換は無視される（事実の改変不可）", bad4.ok && bad4.changes.every((c) => !("done" in (c.patch || {}))));
+  check("完了状態の書換は無視される", bad4.ok && bad4.changes.length === 0, JSON.stringify(bad4.changes));
+  const mixed = advisorValidate({ advice: "x", capacityChanges: [], taskChanges: [{ taskId: "t1", newEstMin: 90, done: true, date: "2099-01-01" }] }, st, TODAY);
+  check("許可フィールド以外は落ちる", mixed.ok && mixed.changes.length === 1 &&
+    Object.keys(mixed.changes[0]).sort().join(",") === "newEstMin,taskId,type", JSON.stringify(mixed.changes));
 
   const bad5 = advisorValidate(null, st, TODAY);
   check("null応答を拒否", !bad5.ok);
+
+  const bad6 = advisorValidate({ advice: "x", capacityChanges: [{ date: "2020-01-01", minutes: 60 }], taskChanges: [] }, st, TODAY);
+  check("過去日への変更を拒否", !bad6.ok);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

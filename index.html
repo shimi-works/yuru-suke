@@ -292,6 +292,9 @@ const store = (() => {
   const LS_KEY = "tatenaoshi.state";
   const CURRENT_VERSION = 1;
   const DEFAULT_WEEKLY = { mon: 120, tue: 120, wed: 120, thu: 120, fri: 120, sat: 180, sun: 180 };
+  const GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.5-flash"];
+  const MILESTONE_KINDS = ["exam", "report", "quiz"];
+  const COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
   const isObj = (x) => x && typeof x === "object" && !Array.isArray(x);
   const arr = (x) => (Array.isArray(x) ? x.slice() : []);
 
@@ -303,28 +306,49 @@ const store = (() => {
       milestones: [],
       tasks: [],
       capacity: { weekly: { ...DEFAULT_WEEKLY }, overrides: {} },
-      settings: { dayBoundaryHour: 3, geminiModel: "gemini-2.5-flash-lite" },
+      settings: { dayBoundaryHour: 3, geminiModel: GEMINI_MODELS[0] },
     };
   }
-  // 欠損フィールドを既定値で補完（部分的な状態・古い状態を常に完全な形に直す）
+  // 欠損・不正フィールドを既定値で補完しつつ全フィールドを型付きで再構築する。
+  // インポートは信頼できない入力（共有されたJSON）なので、素通しのspreadは使わない
+  // （color/kind はHTMLに埋め込まれるため、ここでの検証がXSS対策を兼ねる）
   function normalize(s) {
     const d = defaultState();
     const out = d;
-    out.semester = { ...d.semester, ...(isObj(s.semester) ? s.semester : {}) };
-    out.subjects = arr(s.subjects).filter((x) => isObj(x) && x.id);
-    out.milestones = arr(s.milestones).filter((x) => isObj(x) && x.id);
+    const sem = isObj(s.semester) ? s.semester : {};
+    out.semester = { name: String(sem.name || ""), start: String(sem.start || ""), end: String(sem.end || "") };
+    out.subjects = arr(s.subjects).filter((x) => isObj(x) && x.id).map((x) => ({
+      id: String(x.id), name: String(x.name || ""),
+      color: COLOR_RE.test(String(x.color || "")) ? String(x.color) : "#7aa2f7",
+    }));
+    out.milestones = arr(s.milestones).filter((x) => isObj(x) && x.id).map((x) => ({
+      id: String(x.id), subjectId: x.subjectId ? String(x.subjectId) : null,
+      title: String(x.title || ""), date: String(x.date || ""),
+      kind: MILESTONE_KINDS.includes(x.kind) ? x.kind : "exam",
+    }));
     out.tasks = arr(s.tasks).filter((x) => isObj(x) && x.id).map((t) => ({
-      id: t.id, subjectId: t.subjectId || null, milestoneId: t.milestoneId || null,
+      id: String(t.id), subjectId: t.subjectId ? String(t.subjectId) : null,
+      milestoneId: t.milestoneId ? String(t.milestoneId) : null,
       title: String(t.title || ""), estMin: Math.max(0, t.estMin | 0),
-      done: !!t.done, doneDate: t.doneDate || null,
+      done: !!t.done, doneDate: t.doneDate ? String(t.doneDate) : null,
       doneLog: isObj(t.doneLog) ? { ...t.doneLog } : {},
     }));
     const cap = isObj(s.capacity) ? s.capacity : {};
-    out.capacity = {
-      weekly: { ...DEFAULT_WEEKLY, ...(isObj(cap.weekly) ? cap.weekly : {}) },
-      overrides: isObj(cap.overrides) ? { ...cap.overrides } : {},
+    const wk = isObj(cap.weekly) ? cap.weekly : {};
+    out.capacity = { weekly: {}, overrides: {} };
+    for (const k of Object.keys(DEFAULT_WEEKLY)) {
+      out.capacity.weekly[k] = k in wk ? Math.max(0, wk[k] | 0) : DEFAULT_WEEKLY[k];
+    }
+    const ov = isObj(cap.overrides) ? cap.overrides : {};
+    for (const k of Object.keys(ov)) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(k)) out.capacity.overrides[k] = Math.max(0, ov[k] | 0);
+    }
+    const st = isObj(s.settings) ? s.settings : {};
+    out.settings = {
+      dayBoundaryHour: Number.isInteger(st.dayBoundaryHour) && st.dayBoundaryHour >= 0 && st.dayBoundaryHour <= 23
+        ? st.dayBoundaryHour : d.settings.dayBoundaryHour,
+      geminiModel: GEMINI_MODELS.includes(st.geminiModel) ? st.geminiModel : d.settings.geminiModel,
     };
-    out.settings = { ...d.settings, ...(isObj(s.settings) ? s.settings : {}) };
     return out;
   }
   function migrate(raw) {
@@ -338,14 +362,19 @@ const store = (() => {
     try { return migrate(JSON.parse(localStorage.getItem(LS_KEY))); }
     catch (_) { return defaultState(); }
   }
-  function save(s) { localStorage.setItem(LS_KEY, JSON.stringify(s)); }
+  // プライベートブラウズ・クォータ超過では setItem が同期例外を投げる。
+  // 保存失敗でアプリ全体（後続のrender）を道連れにしないため、失敗は戻り値で伝える
+  function save(s) {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(s)); return true; }
+    catch (_) { return false; }
+  }
   const exportJSON = (s) => JSON.stringify(s, null, 2);
   function importJSON(text) {
     const obj = JSON.parse(text); // 壊れたJSONはここでthrow
     if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("たてなおしのバックアップJSONではありません");
     return migrate(obj);
   }
-  return { LS_KEY, CURRENT_VERSION, defaultState, migrate, load, save, exportJSON, importJSON };
+  return { LS_KEY, CURRENT_VERSION, GEMINI_MODELS, defaultState, migrate, load, save, exportJSON, importJSON };
 })();
 // ==STORE-END==
 
@@ -367,6 +396,10 @@ function advisorValidate(resp, state, today) {
     if (!c || typeof c.date !== "string" || !DATE_RE.test(c.date) ||
         Number.isNaN(Date.parse(c.date + "T00:00:00Z"))) {
       errors.push("日付の形式が不正です: " + (c && c.date));
+      continue;
+    }
+    if (c.date < today) { // 過去日の変更は無意味なデータ混入なので応答ごと破棄
+      errors.push("過去の日付への変更です: " + c.date);
       continue;
     }
     const min = Number(c.minutes);
@@ -408,7 +441,10 @@ let VIEW = "today";
 let WEEK_OFF = 0;
 
 const todayStr = () => planner.effectiveToday(new Date(), S.settings.dayBoundaryHour);
-function commit() { store.save(S); render(); }
+function commit() {
+  if (!store.save(S)) toast("保存できませんでした（ブラウザのストレージ制限）");
+  render();
+}
 
 function fmtMin(m) {
   m = Math.max(0, m | 0);
@@ -730,7 +766,7 @@ function renderSettings() {
     <div class="row" style="margin-top:8px">
       <label class="dim small">モデル</label>
       <select data-chg="gemModel">
-        ${["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"].map((m) =>
+        ${store.GEMINI_MODELS.map((m) =>
           `<option value="${m}" ${S.settings.geminiModel === m ? "selected" : ""}>${m}</option>`).join("")}
       </select>
     </div>
@@ -791,7 +827,7 @@ function openDayModal(date) {
 }
 
 /* ===================== Gemini（無料枠・ブラウザ直叩き・429で自動モデル切替） ===================== */
-const MODELPOOL = ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.5-flash"];
+const MODELPOOL = store.GEMINI_MODELS;
 const AI_SCHEMA = {
   type: "object",
   properties: {
@@ -816,7 +852,11 @@ async function callGemini(prompt, schema, maxTokens = 4000) {
     const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + encodeURIComponent(apiKey);
     let res;
     for (let attempt = 0; attempt < 3; attempt++) {
-      res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      try {
+        res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      } catch (_) {
+        throw new Error("通信できませんでした。オフラインかネットワークが不安定です。");
+      }
       if (res.status !== 503 && res.status !== 500) break; // 高負荷は少し待って自動リトライ
       if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
     }
@@ -894,12 +934,17 @@ function openAiModal() {
 }
 
 let aiPendingChanges = null;
+let aiReqSeq = 0; // モーダルを閉じて開き直した後に、前の質問への応答が新しい画面に混ざるのを防ぐ
 async function aiConsult() {
+  const seq = ++aiReqSeq;
   const box = $("#aiResult");
+  const sendBtn = $("[data-act=aiSend]");
+  if (sendBtn) sendBtn.disabled = true;
   const userText = ($("#aiText") || {}).value || "";
   box.innerHTML = `<div class="dim"><span class="spin">🔄</span> 状態を読んで考えています…</div>`;
   try {
     const resp = await callGemini(buildAiPrompt(userText), AI_SCHEMA);
+    if (seq !== aiReqSeq) return; // 古い応答は表示も適用もしない
     const v = advisorValidate(resp, S, todayStr());
     if (!v.ok) {
       box.innerHTML = `<div class="banner bad">応答を安全に適用できないため破棄しました。<br>${v.errors.map(esc).join("<br>")}</div>`;
@@ -927,8 +972,11 @@ async function aiConsult() {
     }
     box.innerHTML = html;
   } catch (err) {
+    if (seq !== aiReqSeq) return;
     if (err.message === "NOKEY") { openAiModal(); return; }
     box.innerHTML = `<div class="banner bad">${esc(err.message)}</div>`;
+  } finally {
+    if (seq === aiReqSeq) { const b = $("[data-act=aiSend]"); if (b) b.disabled = false; }
   }
 }
 
@@ -1036,7 +1084,9 @@ const ACTIONS = {
     const row = el.closest(".addrow");
     const titleEl = row.querySelector("input[type=text]");
     const title = titleEl.value.trim();
-    const est = Number(row.querySelector("input[type=number]").value) || 120;
+    const rawEst = row.querySelector("input[type=number]").value;
+    const n = Number(rawEst);
+    const est = rawEst.trim() === "" || !Number.isFinite(n) ? 120 : n; // 未入力だけ既定120。0等は下のclampで5分に
     if (!title) { titleEl.focus(); return; }
     S.tasks.push({ id: uid("t"), subjectId: d.subj, milestoneId: d.ms || null,
                    title, estMin: Math.max(5, Math.floor(est)), done: false, doneDate: null, doneLog: {} });
@@ -1169,18 +1219,25 @@ document.addEventListener("keydown", (e) => {
   if (fn) fn(el.dataset, el);
 });
 
-/* 古い上書き（過去日のoverrides）は起動時に掃除して肥大化を防ぐ */
-(function cleanupOverrides() {
-  const today = todayStr();
-  const keep = {};
-  for (const [d, v] of Object.entries(S.capacity.overrides)) if (d >= today) keep[d] = v;
-  if (Object.keys(keep).length !== Object.keys(S.capacity.overrides).length) {
-    S.capacity.overrides = keep;
-    store.save(S);
-  }
-})();
-
-render();
+// 想定外の状態破損でも白紙のまま固まらず、バックアップと復旧の道を出す最後の砦
+try {
+  /* 古い上書き（過去日のoverrides）は起動時に掃除して肥大化を防ぐ */
+  (function cleanupOverrides() {
+    const today = todayStr();
+    const keep = {};
+    for (const [d, v] of Object.entries(S.capacity.overrides)) if (d >= today) keep[d] = v;
+    if (Object.keys(keep).length !== Object.keys(S.capacity.overrides).length) {
+      S.capacity.overrides = keep;
+      store.save(S);
+    }
+  })();
+  render();
+} catch (err) {
+  $("#view").innerHTML = `<div class="banner bad">起動に失敗しました（${esc(err.message)}）。<br>
+    データが壊れている可能性があります。バックアップを保存してからリセットしてください。</div>
+    <div class="row"><button class="btn" data-act="exportDl">バックアップをダウンロード</button>
+    <button class="btn danger" data-act="wipe">全データを削除してやり直す</button></div>`;
+}
 </script>
 </body>
 </html>
