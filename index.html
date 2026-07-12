@@ -1,0 +1,1186 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="崩れた勉強計画を自動で引き直す、大学の学期用スタディプランナー。開いた瞬間に今日やることが立て直されている。">
+<title>たてなおし ― 崩れた計画を引き直すスタディプランナー</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1e222c; --line:#2a2f3a;
+  --text:#e6e9ef; --dim:#8a91a0; --accent:#7aa2f7; --ok:#9ece6a;
+  --warn:#e0af68; --danger:#f7768e; --radius:12px;
+}
+*{box-sizing:border-box; margin:0; padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:"Hiragino Sans","Yu Gothic UI","Noto Sans JP",system-ui,sans-serif;
+  font-size:15px; line-height:1.6;
+}
+#app{max-width:640px; margin:0 auto; padding:0 16px 80px}
+a{color:var(--accent)}
+button{font:inherit; color:inherit; background:none; border:none; cursor:pointer}
+input,select,textarea{
+  font:inherit; color:var(--text); background:var(--panel2);
+  border:1px solid var(--line); border-radius:8px; padding:8px 10px; outline:none;
+}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+input[type=number]{width:80px}
+input[type=date]{color-scheme:dark}
+::placeholder{color:var(--dim)}
+
+header{
+  display:flex; align-items:center; gap:8px; padding:16px 0 8px;
+  position:sticky; top:0; background:var(--bg); z-index:5;
+}
+header h1{font-size:20px; letter-spacing:.06em}
+header .sub{color:var(--dim); font-size:12px; margin-left:auto}
+
+nav{display:flex; gap:8px; padding:8px 0 16px; position:sticky; top:52px; background:var(--bg); z-index:5}
+nav button{
+  flex:1; padding:8px 0; border-radius:var(--radius); background:var(--panel);
+  color:var(--dim); border:1px solid var(--line); transition:all .18s ease;
+}
+nav button.on{background:var(--accent); color:#0f1115; border-color:var(--accent); font-weight:700}
+
+.card{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin-bottom:16px}
+.card h2{font-size:14px; color:var(--dim); font-weight:600; margin-bottom:8px}
+.row{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.grow{flex:1}
+.dim{color:var(--dim)} .small{font-size:12px}
+.btn{
+  padding:8px 16px; border-radius:var(--radius); background:var(--panel2);
+  border:1px solid var(--line); transition:all .18s ease;
+}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent); color:#0f1115; border-color:var(--accent); font-weight:700}
+.btn.danger{color:var(--danger); border-color:var(--danger)}
+.btn.small{padding:4px 10px; font-size:13px; border-radius:8px}
+.chip{
+  display:inline-block; padding:2px 10px; border-radius:99px; font-size:12px;
+  background:var(--panel2); border:1px solid var(--line); color:var(--dim);
+}
+.chip.tap{cursor:pointer; transition:border-color .18s ease}
+.chip.tap:hover{border-color:var(--accent)}
+
+.banner{border-radius:var(--radius); padding:10px 14px; margin-bottom:8px; font-size:13px; border:1px solid}
+.banner.warn{background:rgba(224,175,104,.08); border-color:rgba(224,175,104,.45); color:var(--warn)}
+.banner.bad{background:rgba(247,118,142,.08); border-color:rgba(247,118,142,.45); color:var(--danger)}
+.banner.info{background:rgba(122,162,247,.08); border-color:rgba(122,162,247,.4); color:var(--accent)}
+
+.task{
+  display:flex; align-items:center; gap:12px; padding:10px 0;
+  border-bottom:1px solid var(--line); animation:fadein .2s ease;
+}
+.task:last-child{border-bottom:none}
+@keyframes fadein{from{opacity:0; transform:translateY(2px)}to{opacity:1; transform:none}}
+.check{
+  width:26px; height:26px; min-width:26px; border-radius:50%;
+  border:2px solid var(--dim); transition:all .18s ease;
+}
+.check:hover{border-color:var(--ok)}
+.check.done{background:var(--ok); border-color:var(--ok); color:#0f1115; font-weight:900; font-size:14px}
+.cbar{width:4px; align-self:stretch; border-radius:2px}
+.tmain{flex:1; min-width:0}
+.ttitle{overflow-wrap:anywhere}
+.ttitle.done{text-decoration:line-through; color:var(--dim)}
+.tmeta{font-size:12px; color:var(--dim)}
+.tmin{font-size:13px; color:var(--dim); white-space:nowrap}
+
+.stats{display:flex; gap:8px; margin-bottom:16px}
+.stat{flex:1; background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:10px; text-align:center}
+.stat .v{font-size:18px; font-weight:700}
+.stat .k{font-size:11px; color:var(--dim)}
+
+.day{margin-bottom:8px}
+.dayhead{display:flex; align-items:center; gap:8px; padding:6px 0}
+.dayhead .dname{font-weight:700}
+.dayhead .today-mark{color:var(--accent); font-size:12px; font-weight:700}
+.daybody{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:8px 14px}
+.daybody:empty{display:none}
+.mrow{display:flex; gap:8px; align-items:center; padding:4px 0; font-size:13px}
+.badge{font-size:11px; padding:1px 8px; border-radius:6px; font-weight:700}
+.badge.exam{background:rgba(247,118,142,.15); color:var(--danger)}
+.badge.report{background:rgba(224,175,104,.15); color:var(--warn)}
+.badge.quiz{background:rgba(122,162,247,.15); color:var(--accent)}
+
+.addrow{display:flex; gap:8px; margin-top:8px; flex-wrap:wrap}
+.addrow input[type=text]{flex:1; min-width:120px}
+.subj-head{display:flex; align-items:center; gap:8px; margin-bottom:8px}
+.subj-head .dot{width:12px; height:12px; border-radius:50%}
+.subj-head .name{font-weight:700; font-size:16px}
+.msblock{border-left:2px solid var(--line); padding-left:12px; margin:12px 0}
+.xbtn{color:var(--dim); font-size:13px; padding:4px 8px; border-radius:6px}
+.xbtn:hover{color:var(--danger)}
+
+#overlay{
+  position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:20;
+  display:none; align-items:flex-end; justify-content:center;
+}
+#overlay.show{display:flex}
+@media(min-width:560px){ #overlay{align-items:center} }
+#modal{
+  background:var(--panel); border:1px solid var(--line); border-radius:16px 16px 0 0;
+  width:100%; max-width:560px; max-height:85vh; overflow-y:auto; padding:24px 16px;
+  animation:slideup .2s ease;
+}
+@media(min-width:560px){ #modal{border-radius:16px} }
+@keyframes slideup{from{transform:translateY(24px); opacity:0}to{transform:none; opacity:1}}
+#modal h3{font-size:16px; margin-bottom:16px}
+.diff{background:var(--panel2); border-radius:8px; padding:8px 12px; margin:4px 0; font-size:13px}
+.diff .old{color:var(--dim); text-decoration:line-through}
+.diff .new{color:var(--ok); font-weight:700}
+
+#toast{
+  position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(80px);
+  background:var(--panel2); border:1px solid var(--line); border-radius:99px;
+  padding:8px 24px; font-size:13px; z-index:30; transition:transform .2s ease; white-space:nowrap;
+}
+#toast.show{transform:translateX(-50%) translateY(0)}
+.spin{display:inline-block; animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty{color:var(--dim); text-align:center; padding:24px 8px; font-size:13px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🔄 たてなおし</h1>
+    <span class="sub" id="semLabel"></span>
+  </header>
+  <nav id="nav"></nav>
+  <div id="banner"></div>
+  <main id="view"></main>
+</div>
+<div id="overlay"><div id="modal"></div></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* ===================== planner（心臓部・純関数・DOM非依存） ===================== */
+// ==PLANNER-START==
+const planner = (() => {
+  "use strict";
+  const MIN_CHUNK_MIN = 10;  // これ未満の細切れ割当は作らない（学習の実用単位）
+  const DOW = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  const DAY_MS = 86400000;
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const fmtLocal = (d) => d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  // 深夜 boundaryHour 時までは「前日」扱い（0時切替だと深夜勉強分が翌日タスクに化ける）
+  function effectiveToday(now, boundaryHour) {
+    return fmtLocal(new Date(now.getTime() - (boundaryHour || 0) * 3600000));
+  }
+  // 暦計算はUTC固定で行い、ローカルタイムゾーンの罠を構造的に避ける（比較は文字列）
+  const toUTC = (s) => Date.parse(s + "T00:00:00Z");
+  const addDays = (s, n) => new Date(toUTC(s) + n * DAY_MS).toISOString().slice(0, 10);
+  const dayOfWeek = (s) => DOW[new Date(toUTC(s)).getUTCDay()];
+  const isDateStr = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(toUTC(s));
+
+  function capacityOn(date, capacity) {
+    const ov = (capacity && capacity.overrides) || {};
+    if (Object.prototype.hasOwnProperty.call(ov, date)) return Math.max(0, ov[date] | 0);
+    return Math.max(0, ((capacity && capacity.weekly) || {})[dayOfWeek(date)] | 0);
+  }
+  // 残量 = 見積もり − 日別実績(doneLog)の合計。done=true は残量0
+  function remainingMin(task) {
+    if (task.done) return 0;
+    const spent = Object.values(task.doneLog || {}).reduce((a, v) => a + (v | 0), 0);
+    return Math.max(0, (task.estMin | 0) - spent);
+  }
+
+  // (state, today) → { assignments: {date:[{taskId,min}]}, warnings, totalRemainingMin }
+  // 割当は保存しない派生値。開くたびにこれが走るだけで繰越が完了する（再計画はボタンではなく常時）
+  function plan(state, today) {
+    const warnings = [];
+    const msById = new Map((state.milestones || []).map((m) => [m.id, m]));
+    const semEnd = state.semester && isDateStr(state.semester.end) ? state.semester.end : addDays(today, 60);
+
+    // 未完了タスクに実効締切を与える（過去締切は今日=最優先。締切なしは学期末扱い）
+    const pending = (state.tasks || [])
+      .map((t) => {
+        const m = t.milestoneId ? msById.get(t.milestoneId) : null;
+        const raw = m && isDateStr(m.date) ? m.date : semEnd;
+        return { id: t.id, est: remainingMin(t), milestoneId: m ? m.id : null,
+                 deadline: raw < today ? today : raw, rawDeadline: raw };
+      })
+      .filter((p) => p.est > 0);
+
+    // 締切超過の警告（未完了タスクが残っている過去締切のみ）
+    const overdueSeen = new Set();
+    for (const p of pending) {
+      if (p.rawDeadline < today && p.milestoneId && !overdueSeen.has(p.milestoneId)) {
+        overdueSeen.add(p.milestoneId);
+        const m = msById.get(p.milestoneId);
+        warnings.push({ type: "overdue", milestoneId: m.id, title: m.title, date: m.date });
+      }
+    }
+
+    if (pending.length === 0) return { assignments: {}, warnings, totalRemainingMin: 0 };
+
+    // 今日の実績分は今日の容量から差し引く（チェック済みの時間に新タスクを二重に詰めない）
+    const doneToday = (state.tasks || []).reduce((a, t) => a + (((t.doneLog || {})[today]) | 0), 0);
+    const capOn = (d) => {
+      const c = capacityOn(d, state.capacity || {});
+      return d === today ? Math.max(0, c - doneToday) : c;
+    };
+
+    // 締切ごとの余裕度: (今日〜締切の可処分合計) − (その日までに終えるべき残量の累積)
+    // 累積で見るのは、他科目のより早い締切のタスクも同じ時間を食うため
+    let availSum = 0, availCursor = today;
+    const availCache = new Map();
+    function availUntil(end) {
+      if (availCache.has(end)) return availCache.get(end);
+      for (; availCursor <= end; availCursor = addDays(availCursor, 1)) availSum += capOn(availCursor);
+      availCache.set(end, availSum);
+      return availSum;
+    }
+    const msWithPending = [...new Set(pending.filter((p) => p.milestoneId).map((p) => p.milestoneId))]
+      .map((id) => msById.get(id))
+      .filter((m) => m && isDateStr(m.date) && m.date >= today) // 過去締切はoverdue警告で扱い済み
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    for (const m of msWithPending) {
+      const cumReq = pending.filter((p) => p.deadline <= m.date).reduce((a, p) => a + p.est, 0);
+      const avail = availUntil(m.date);
+      if (cumReq > avail) {
+        const cands = pending.filter((p) => p.milestoneId === m.id)
+          .sort((a, b) => b.est - a.est).slice(0, 3).map((p) => p.id);
+        warnings.push({ type: "infeasible", milestoneId: m.id, title: m.title, date: m.date,
+                        shortfallMin: cumReq - avail, reduceCandidates: cands });
+      }
+    }
+
+    // EDF（締切の早い順）貪欲割当。同じ締切内は登録順を保つ
+    const queue = pending.map((p, i) => ({ ...p, remain: p.est, ord: i }))
+      .sort((a, b) => (a.deadline < b.deadline ? -1 : a.deadline > b.deadline ? 1 : a.ord - b.ord));
+    const lastDeadline = queue.reduce((a, p) => (p.deadline > a ? p.deadline : a), today);
+    const horizon = semEnd > lastDeadline ? semEnd : lastDeadline;
+    const assignments = {};
+    let qi = 0;
+    for (let d = today; d <= horizon && qi < queue.length; d = addDays(d, 1)) {
+      let cap = capOn(d);
+      while (cap > 0 && qi < queue.length) {
+        const t = queue[qi];
+        if (cap < MIN_CHUNK_MIN && t.remain > cap) break; // 細切れ回避: 数分の枠に無理に詰めない
+        const chunk = Math.min(cap, t.remain);
+        (assignments[d] = assignments[d] || []).push({ taskId: t.id, min: chunk });
+        cap -= chunk;
+        t.remain -= chunk;
+        if (t.remain === 0) qi++;
+      }
+    }
+    const leftover = queue.slice(qi).filter((t) => t.remain > 0);
+    if (leftover.length) {
+      warnings.push({ type: "overflow", taskIds: leftover.map((t) => t.id),
+                      totalMin: leftover.reduce((a, t) => a + t.remain, 0) });
+    }
+    return { assignments, warnings,
+             totalRemainingMin: pending.reduce((a, p) => a + p.est, 0) };
+  }
+
+  return { effectiveToday, addDays, dayOfWeek, isDateStr, capacityOn, remainingMin, plan, MIN_CHUNK_MIN };
+})();
+// ==PLANNER-END==
+
+/* ===================== store（localStorage・version・入出力） ===================== */
+// ==STORE-START==
+const store = (() => {
+  "use strict";
+  const LS_KEY = "tatenaoshi.state";
+  const CURRENT_VERSION = 1;
+  const DEFAULT_WEEKLY = { mon: 120, tue: 120, wed: 120, thu: 120, fri: 120, sat: 180, sun: 180 };
+  const isObj = (x) => x && typeof x === "object" && !Array.isArray(x);
+  const arr = (x) => (Array.isArray(x) ? x.slice() : []);
+
+  function defaultState() {
+    return {
+      version: CURRENT_VERSION,
+      semester: { name: "", start: "", end: "" },
+      subjects: [],
+      milestones: [],
+      tasks: [],
+      capacity: { weekly: { ...DEFAULT_WEEKLY }, overrides: {} },
+      settings: { dayBoundaryHour: 3, geminiModel: "gemini-2.5-flash-lite" },
+    };
+  }
+  // 欠損フィールドを既定値で補完（部分的な状態・古い状態を常に完全な形に直す）
+  function normalize(s) {
+    const d = defaultState();
+    const out = d;
+    out.semester = { ...d.semester, ...(isObj(s.semester) ? s.semester : {}) };
+    out.subjects = arr(s.subjects).filter((x) => isObj(x) && x.id);
+    out.milestones = arr(s.milestones).filter((x) => isObj(x) && x.id);
+    out.tasks = arr(s.tasks).filter((x) => isObj(x) && x.id).map((t) => ({
+      id: t.id, subjectId: t.subjectId || null, milestoneId: t.milestoneId || null,
+      title: String(t.title || ""), estMin: Math.max(0, t.estMin | 0),
+      done: !!t.done, doneDate: t.doneDate || null,
+      doneLog: isObj(t.doneLog) ? { ...t.doneLog } : {},
+    }));
+    const cap = isObj(s.capacity) ? s.capacity : {};
+    out.capacity = {
+      weekly: { ...DEFAULT_WEEKLY, ...(isObj(cap.weekly) ? cap.weekly : {}) },
+      overrides: isObj(cap.overrides) ? { ...cap.overrides } : {},
+    };
+    out.settings = { ...d.settings, ...(isObj(s.settings) ? s.settings : {}) };
+    return out;
+  }
+  function migrate(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return defaultState();
+    // version 1 が初版。スキーマを変えたら raw.version ごとの変換をここに足してから normalize する
+    const out = normalize(raw);
+    out.version = CURRENT_VERSION;
+    return out;
+  }
+  function load() {
+    try { return migrate(JSON.parse(localStorage.getItem(LS_KEY))); }
+    catch (_) { return defaultState(); }
+  }
+  function save(s) { localStorage.setItem(LS_KEY, JSON.stringify(s)); }
+  const exportJSON = (s) => JSON.stringify(s, null, 2);
+  function importJSON(text) {
+    const obj = JSON.parse(text); // 壊れたJSONはここでthrow
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("たてなおしのバックアップJSONではありません");
+    return migrate(obj);
+  }
+  return { LS_KEY, CURRENT_VERSION, defaultState, migrate, load, save, exportJSON, importJSON };
+})();
+// ==STORE-END==
+
+/* ===================== AI応答の検証（3段ガードの1段目） ===================== */
+// ==ADVISOR-VALIDATE-START==
+// 許可するのは可処分時間の上書きと見積もり分数の調整のみ。
+// タスクの完了状態・締切日は書き換え不可（AIが事実を改変できない設計）。
+// 1件でも不正があれば応答全体を破棄する（ok:false）。
+function advisorValidate(resp, state, today) {
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  if (!resp || typeof resp !== "object" || Array.isArray(resp)) {
+    return { ok: false, errors: ["応答が読み取れませんでした"], advice: "", changes: [] };
+  }
+  const errors = [];
+  const changes = [];
+  const advice = typeof resp.advice === "string" ? resp.advice : "";
+  const taskById = new Map((state.tasks || []).map((t) => [t.id, t]));
+  for (const c of (Array.isArray(resp.capacityChanges) ? resp.capacityChanges : [])) {
+    if (!c || typeof c.date !== "string" || !DATE_RE.test(c.date) ||
+        Number.isNaN(Date.parse(c.date + "T00:00:00Z"))) {
+      errors.push("日付の形式が不正です: " + (c && c.date));
+      continue;
+    }
+    const min = Number(c.minutes);
+    if (!Number.isInteger(min) || min < 0 || min > 1440) {
+      errors.push("可処分時間が範囲外です: " + c.date + " → " + c.minutes);
+      continue;
+    }
+    changes.push({ type: "capacity", date: c.date, minutes: min });
+  }
+  for (const c of (Array.isArray(resp.taskChanges) ? resp.taskChanges : [])) {
+    if (!c || !taskById.has(c.taskId)) {
+      errors.push("存在しないタスクへの変更です: " + (c && c.taskId));
+      continue;
+    }
+    if (!("newEstMin" in c)) continue; // 見積もり以外の書き換え指示は適用しない（許可フィールド制限）
+    const est = Number(c.newEstMin);
+    if (!Number.isInteger(est) || est < 5 || est > 6000) {
+      errors.push("見積もりが範囲外です: " + c.taskId + " → " + c.newEstMin);
+      continue;
+    }
+    changes.push({ type: "estMin", taskId: c.taskId, newEstMin: est });
+  }
+  return { ok: errors.length === 0, errors, advice, changes };
+}
+// ==ADVISOR-VALIDATE-END==
+
+/* ===================== UI 共通 ===================== */
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const uid = (p) => p + "-" + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
+const KIND_LABEL = { exam: "試験", report: "レポート", quiz: "小テスト" };
+const DOW_JA = { mon: "月", tue: "火", wed: "水", thu: "木", fri: "金", sat: "土", sun: "日" };
+const PALETTE = ["#7aa2f7", "#9ece6a", "#f7768e", "#e0af68", "#bb9af7", "#7dcfff", "#ff9e64", "#73daca"];
+const LS_GEMINI_KEY = "tatenaoshi.geminiKey"; // キーはバックアップJSONに含めないため状態の外に置く
+
+let S = store.load();
+let P = null;              // 最新のplan結果（毎render導出。保存しない）
+let VIEW = "today";
+let WEEK_OFF = 0;
+
+const todayStr = () => planner.effectiveToday(new Date(), S.settings.dayBoundaryHour);
+function commit() { store.save(S); render(); }
+
+function fmtMin(m) {
+  m = Math.max(0, m | 0);
+  const h = Math.floor(m / 60), mm = m % 60;
+  if (h && mm) return h + "時間" + mm + "分";
+  if (h) return h + "時間";
+  return mm + "分";
+}
+function mdLabel(d) {
+  const [, m, day] = d.split("-");
+  return Number(m) + "/" + Number(day) + "(" + DOW_JA[planner.dayOfWeek(d)] + ")";
+}
+function daysLeft(d) {
+  return Math.round((Date.parse(d + "T00:00:00Z") - Date.parse(todayStr() + "T00:00:00Z")) / 86400000);
+}
+const subjOf = (id) => S.subjects.find((s) => s.id === id);
+const msOf = (id) => S.milestones.find((m) => m.id === id);
+const taskOf = (id) => S.tasks.find((t) => t.id === id);
+const pendingOf = (t) => planner.remainingMin(t);
+
+let toastTimer = null;
+function toast(msg) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+/* ===================== render ===================== */
+const TABS = [["today", "今日"], ["week", "週"], ["manage", "科目・締切"], ["settings", "設定"]];
+
+function render() {
+  P = planner.plan(S, todayStr());
+  $("#semLabel").textContent = S.semester.name || "";
+  $("#nav").innerHTML = TABS.map(([k, label]) =>
+    `<button class="${VIEW === k ? "on" : ""}" data-act="tab" data-tab="${k}">${label}</button>`).join("");
+  renderBanner();
+  ({ today: renderToday, week: renderWeek, manage: renderManage, settings: renderSettings })[VIEW]();
+}
+
+function renderBanner() {
+  const html = P.warnings.map((w) => {
+    if (w.type === "infeasible") {
+      const cands = (w.reduceCandidates || []).map((id) => taskOf(id)).filter(Boolean).map((t) => "「" + esc(t.title) + "」");
+      return `<div class="banner bad">⚠ <b>${esc(w.title)}</b>（${mdLabel(w.date)}）に約 <b>${fmtMin(w.shortfallMin)}</b> 足りません。範囲を削るか時間を増やしてください。${cands.length ? "削る候補: " + cands.join(" ") : ""}</div>`;
+    }
+    if (w.type === "overdue") {
+      return `<div class="banner warn">「${esc(w.title)}」の締切（${mdLabel(w.date)}）を過ぎています。未完了分は今日以降に再配分済みです。</div>`;
+    }
+    if (w.type === "overflow") {
+      return `<div class="banner warn">学期末までに入り切らないタスクが ${w.taskIds.length} 件（${fmtMin(w.totalMin)}）あります。可処分時間か学期終了日を見直してください。</div>`;
+    }
+    return "";
+  }).join("");
+  $("#banner").innerHTML = html;
+}
+
+/* ---------- 今日ビュー ---------- */
+function renderToday() {
+  const today = todayStr();
+  const chunks = P.assignments[today] || [];
+  const capRaw = planner.capacityOn(today, S.capacity);
+  const doneEntries = S.tasks
+    .filter((t) => ((t.doneLog || {})[today] | 0) > 0 || t.doneDate === today)
+    .map((t) => ({ t, min: (t.doneLog || {})[today] | 0 }));
+  const doneMin = doneEntries.reduce((a, e) => a + e.min, 0);
+  const planMin = chunks.reduce((a, c) => a + c.min, 0);
+  const isOff = capRaw === 0 && Object.prototype.hasOwnProperty.call(S.capacity.overrides, today);
+
+  let html = `
+    <div class="stats">
+      <div class="stat"><div class="v">${fmtMin(planMin)}</div><div class="k">今日やる</div></div>
+      <div class="stat"><div class="v">${fmtMin(doneMin)}</div><div class="k">今日やった</div></div>
+      <div class="stat"><div class="v">${fmtMin(P.totalRemainingMin)}</div><div class="k">全体の残り</div></div>
+    </div>`;
+
+  if (S.subjects.length === 0) {
+    html += `<div class="card"><div class="empty">
+      まだ何も登録されていません。<br><b>科目名と締切日だけ</b>で始められます。<br><br>
+      <button class="btn primary" data-act="tab" data-tab="manage">科目を登録する</button>
+    </div></div>`;
+    $("#view").innerHTML = html;
+    return;
+  }
+
+  html += `<div class="card"><h2>${mdLabel(today)} にやること</h2>`;
+  if (isOff) {
+    html += `<div class="empty">今日はお休みにしています 🍵<br>分は明日以降に配り直し済み。</div>`;
+  } else if (chunks.length === 0) {
+    html += `<div class="empty">${P.totalRemainingMin === 0 ? "全部終わっています。おつかれさま 🎉" : "今日の割当はありません。"}</div>`;
+  } else {
+    for (const c of chunks) {
+      const t = taskOf(c.taskId);
+      if (!t) continue;
+      const subj = subjOf(t.subjectId);
+      const m = t.milestoneId ? msOf(t.milestoneId) : null;
+      const remain = pendingOf(t);
+      const split = remain > c.min ? `（全体の残り ${fmtMin(remain)} のうち）` : "";
+      html += `<div class="task">
+        <button class="check" data-act="doneChunk" data-id="${t.id}" data-min="${c.min}" title="この分を完了"></button>
+        <div class="cbar" style="background:${subj ? subj.color : "#555"}"></div>
+        <div class="tmain">
+          <div class="ttitle">${esc(t.title)}</div>
+          <div class="tmeta">${subj ? esc(subj.name) : ""}${m ? " ・ " + esc(m.title) + " " + mdLabel(m.date) : ""} ${split}</div>
+        </div>
+        <span class="tmin">${fmtMin(c.min)}</span>
+        ${remain > c.min ? `<button class="xbtn" data-act="finishTask" data-id="${t.id}" title="タスク全体を完了にする">全部✔</button>` : ""}
+      </div>`;
+    }
+  }
+  html += `</div>`;
+
+  if (doneEntries.length) {
+    html += `<div class="card"><h2>今日やった分（タップで取り消し）</h2>`;
+    for (const { t, min } of doneEntries) {
+      const subj = subjOf(t.subjectId);
+      html += `<div class="task">
+        <button class="check done" data-act="undoToday" data-id="${t.id}">✔</button>
+        <div class="cbar" style="background:${subj ? subj.color : "#555"}"></div>
+        <div class="tmain"><div class="ttitle done">${esc(t.title)}</div></div>
+        <span class="tmin">${min ? fmtMin(min) : "完了"}</span>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  const upcoming = S.milestones
+    .filter((m) => planner.isDateStr(m.date) && m.date >= today)
+    .sort((a, b) => (a.date < b.date ? -1 : 1)).slice(0, 3);
+  if (upcoming.length) {
+    html += `<div class="card"><h2>直近の締切</h2>`;
+    for (const m of upcoming) {
+      const subj = subjOf(m.subjectId);
+      const dl = daysLeft(m.date);
+      html += `<div class="mrow">
+        <span class="badge ${m.kind}">${KIND_LABEL[m.kind] || ""}</span>
+        <span class="grow">${subj ? esc(subj.name) + " " : ""}${esc(m.title)}</span>
+        <span class="dim">${mdLabel(m.date)}</span>
+        <b style="color:${dl <= 3 ? "var(--danger)" : "var(--accent)"}">${dl === 0 ? "今日" : "D-" + dl}</b>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `<div class="row" style="gap:8px">
+    ${isOff
+      ? `<button class="btn grow" data-act="undoOffToday">やっぱり今日やる</button>`
+      : `<button class="btn grow" data-act="offToday">今日は無理 🫠</button>`}
+    <button class="btn primary grow" data-act="openAi">AIと立て直す ✨</button>
+  </div>`;
+  $("#view").innerHTML = html;
+}
+
+/* ---------- 週ビュー ---------- */
+function renderWeek() {
+  const today = todayStr();
+  const start = planner.addDays(today, WEEK_OFF * 7);
+  let html = `<div class="row" style="margin-bottom:16px">
+    <button class="btn small" data-act="weekOff" data-d="-1">‹ 前の7日</button>
+    <button class="btn small ${WEEK_OFF === 0 ? "primary" : ""}" data-act="weekOff" data-d="0">今日から</button>
+    <button class="btn small" data-act="weekOff" data-d="1">次の7日 ›</button>
+    <span class="dim small grow" style="text-align:right">日付タップで時間変更</span>
+  </div>`;
+
+  for (let i = 0; i < 7; i++) {
+    const d = planner.addDays(start, i);
+    const cap = planner.capacityOn(d, S.capacity);
+    const isOverride = Object.prototype.hasOwnProperty.call(S.capacity.overrides, d);
+    const msToday = S.milestones.filter((m) => m.date === d);
+    const chunks = d >= today ? (P.assignments[d] || []) : [];
+    const actual = S.tasks.reduce((a, t) => a + (((t.doneLog || {})[d]) | 0), 0);
+    html += `<div class="day">
+      <div class="dayhead">
+        <span class="dname">${mdLabel(d)}</span>
+        ${d === today ? '<span class="today-mark">今日</span>' : ""}
+        <span class="chip tap" data-act="dayEdit" data-date="${d}">${cap === 0 ? "休み" : fmtMin(cap)}${isOverride ? " ✎" : ""}</span>
+        ${msToday.map((m) => `<span class="badge ${m.kind}">${KIND_LABEL[m.kind]} ${esc(m.title)}</span>`).join("")}
+        ${d < today && actual ? `<span class="chip">実績 ${fmtMin(actual)}</span>` : ""}
+      </div>
+      <div class="daybody">${chunks.map((c) => {
+        const t = taskOf(c.taskId);
+        if (!t) return "";
+        const subj = subjOf(t.subjectId);
+        return `<div class="mrow"><span style="color:${subj ? subj.color : "#888"}">●</span>
+          <span class="grow">${esc(t.title)}</span><span class="dim">${fmtMin(c.min)}</span></div>`;
+      }).join("")}</div>
+    </div>`;
+  }
+  $("#view").innerHTML = html;
+}
+
+/* ---------- 科目・締切管理 ---------- */
+function renderManage() {
+  let html = `<div class="card">
+    <h2>科目を追加</h2>
+    <div class="addrow">
+      <input type="text" id="newSubjName" placeholder="科目名（例: 熱力学）" data-enter="addSubject">
+      <button class="btn primary" data-act="addSubject">追加</button>
+    </div>
+  </div>`;
+
+  for (const subj of S.subjects) {
+    const mss = S.milestones.filter((m) => m.subjectId === subj.id)
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+    html += `<div class="card">
+      <div class="subj-head">
+        <span class="dot" style="background:${subj.color}"></span>
+        <button class="name" data-act="editSubj" data-id="${subj.id}" title="名前を変更">${esc(subj.name)}</button>
+        <span class="grow"></span>
+        <button class="xbtn" data-act="delSubj" data-id="${subj.id}">削除</button>
+      </div>`;
+
+    for (const m of mss) {
+      const tasks = S.tasks.filter((t) => t.milestoneId === m.id);
+      const dl = daysLeft(m.date);
+      html += `<div class="msblock">
+        <div class="row">
+          <span class="badge ${m.kind}">${KIND_LABEL[m.kind]}</span>
+          <button style="font-weight:700" data-act="editMs" data-id="${m.id}" title="名前を変更">${esc(m.title)}</button>
+          <input type="date" value="${esc(m.date)}" data-chg="msDate" data-id="${m.id}">
+          <span class="dim small">${dl >= 0 ? (dl === 0 ? "今日" : "D-" + dl) : "終了"}</span>
+          <span class="grow"></span>
+          <button class="xbtn" data-act="delMs" data-id="${m.id}">削除</button>
+        </div>`;
+      for (const t of tasks) {
+        html += `<div class="task">
+          <div class="tmain">
+            <button class="ttitle ${t.done ? "done" : ""}" data-act="editTask" data-id="${t.id}" title="名前を変更">${esc(t.title)}</button>
+          </div>
+          <input type="number" value="${t.estMin}" min="5" step="5" data-chg="taskEst" data-id="${t.id}" title="見積もり(分)">
+          <span class="dim small">分</span>
+          <button class="xbtn" data-act="delTask" data-id="${t.id}">×</button>
+        </div>`;
+      }
+      if (tasks.length === 0) {
+        html += `<div class="row small" style="padding:4px 0">
+          <span class="dim">タスク未分割 →</span>
+          <button class="btn small" data-act="quickTask" data-id="${m.id}">まるごと1タスク作る（180分）</button>
+        </div>`;
+      }
+      html += `<div class="addrow">
+        <input type="text" placeholder="タスク（例: 第3章の演習）" data-enter="addTask" data-ms="${m.id}" data-subj="${subj.id}">
+        <input type="number" value="120" min="5" step="5" title="見積もり(分)">
+        <button class="btn small" data-act="addTask" data-ms="${m.id}" data-subj="${subj.id}">＋</button>
+      </div>
+      </div>`;
+    }
+
+    html += `<div class="addrow">
+      <input type="text" placeholder="締切名（例: 中間試験）" data-enter="addMs" data-subj="${subj.id}">
+      <input type="date" value="${planner.addDays(todayStr(), 14)}">
+      <select><option value="exam">試験</option><option value="report">レポート</option><option value="quiz">小テスト</option></select>
+      <button class="btn small" data-act="addMs" data-subj="${subj.id}">＋ 締切</button>
+    </div>`;
+
+    const freeTasks = S.tasks.filter((t) => t.subjectId === subj.id && !t.milestoneId);
+    if (freeTasks.length) {
+      html += `<div class="msblock"><div class="dim small">締切なし（学期末までに）</div>`;
+      for (const t of freeTasks) {
+        html += `<div class="task">
+          <div class="tmain"><button class="ttitle ${t.done ? "done" : ""}" data-act="editTask" data-id="${t.id}">${esc(t.title)}</button></div>
+          <input type="number" value="${t.estMin}" min="5" step="5" data-chg="taskEst" data-id="${t.id}">
+          <span class="dim small">分</span>
+          <button class="xbtn" data-act="delTask" data-id="${t.id}">×</button>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (S.subjects.length === 0) {
+    html += `<div class="empty">科目名を入れて「追加」→ 締切日を入れるだけで、今日やる量の計算が始まります。<br>タスク分割はあとからで大丈夫。</div>`;
+  }
+  $("#view").innerHTML = html;
+}
+
+/* ---------- 設定 ---------- */
+function renderSettings() {
+  const w = S.capacity.weekly;
+  const key = localStorage.getItem(LS_GEMINI_KEY) || "";
+  let html = `
+  <div class="card"><h2>学期</h2>
+    <div class="row" style="margin-bottom:8px">
+      <input type="text" class="grow" placeholder="学期名（例: 2026前期）" value="${esc(S.semester.name)}" data-chg="semName">
+    </div>
+    <div class="row">
+      <label class="dim small">開始</label><input type="date" value="${esc(S.semester.start)}" data-chg="semStart">
+      <label class="dim small">終了</label><input type="date" value="${esc(S.semester.end)}" data-chg="semEnd">
+    </div>
+    <p class="dim small" style="margin-top:8px">締切のないタスクは学期終了日までに配分されます。</p>
+  </div>
+  <div class="card"><h2>曜日ごとの勉強時間（分）</h2>
+    <div class="row">
+      ${["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((d) =>
+        `<label style="text-align:center"><span class="dim small">${DOW_JA[d]}</span><br>
+         <input type="number" style="width:64px" value="${w[d]}" min="0" step="10" data-chg="weekly" data-dow="${d}"></label>`).join("")}
+    </div>
+    <p class="dim small" style="margin-top:8px">バイトや休みの日は、週ビューで日付ごとに上書きできます。</p>
+  </div>
+  <div class="card"><h2>日付の境界</h2>
+    <div class="row">
+      <select data-chg="boundary">
+        ${[0, 1, 2, 3, 4, 5].map((h) => `<option value="${h}" ${S.settings.dayBoundaryHour === h ? "selected" : ""}>深夜${h}時</option>`).join("")}
+      </select>
+      <span class="dim small grow">この時刻までは「前日」扱い。深夜の勉強分が翌日に化けるのを防ぎます。</span>
+    </div>
+  </div>
+  <div class="card"><h2>AI（Gemini・無料枠）</h2>
+    <p class="dim small" style="margin-bottom:8px">なくても全機能が動きます。キーを入れると「AIと立て直す」で相談できます。
+    キーは<b>この端末にのみ</b>保存され、バックアップJSONには含まれません。
+    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">無料キーの取得はこちら</a></p>
+    <div class="row">
+      <input type="password" id="gemKey" class="grow" placeholder="AIza..." value="${esc(key)}">
+      <button class="btn" data-act="saveKey">保存</button>
+      ${key ? `<button class="btn danger" data-act="delKey">削除</button>` : ""}
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="dim small">モデル</label>
+      <select data-chg="gemModel">
+        ${["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"].map((m) =>
+          `<option value="${m}" ${S.settings.geminiModel === m ? "selected" : ""}>${m}</option>`).join("")}
+      </select>
+    </div>
+  </div>
+  <div class="card"><h2>バックアップ</h2>
+    <div class="row">
+      <button class="btn" data-act="exportDl">JSONをダウンロード</button>
+      <button class="btn" data-act="exportCopy">コピー</button>
+      <button class="btn" data-act="importOpen">インポート</button>
+    </div>
+    <p class="dim small" style="margin-top:8px">機種変・スマホ⇄PCの移動・AIに渡す用。</p>
+  </div>
+  <div class="card"><h2>危険な操作</h2>
+    <button class="btn danger" data-act="wipe">全データを削除</button>
+  </div>
+  <p class="dim small" style="text-align:center">たてなおし v1.0 ― 崩れた計画を引き直すスタディプランナー</p>`;
+  $("#view").innerHTML = html;
+}
+
+/* ===================== modal ===================== */
+function openModal(html) {
+  $("#modal").innerHTML = html;
+  $("#overlay").classList.add("show");
+  const first = $("#modal input, #modal textarea");
+  if (first) first.focus();
+}
+function closeModal() { $("#overlay").classList.remove("show"); }
+$("#overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeModal();
+  if (!e.target.closest("input,textarea,select") && !e.ctrlKey && !e.metaKey) {
+    const idx = ["1", "2", "3", "4"].indexOf(e.key);
+    if (idx >= 0) { VIEW = TABS[idx][0]; render(); }
+  }
+});
+
+function openTextModal(title, value, onSave) {
+  openModal(`<h3>${esc(title)}</h3>
+    <div class="row"><input type="text" id="tmInput" class="grow" value="${esc(value)}" data-enter="tmSave">
+    <button class="btn primary" data-act="tmSave">保存</button></div>`);
+  textModalCb = onSave;
+}
+let textModalCb = null;
+
+function openDayModal(date) {
+  const w = S.capacity.weekly[planner.dayOfWeek(date)];
+  const isOv = Object.prototype.hasOwnProperty.call(S.capacity.overrides, date);
+  const cur = planner.capacityOn(date, S.capacity);
+  openModal(`<h3>${mdLabel(date)} の勉強時間</h3>
+    <div class="row" style="margin-bottom:16px">
+      ${[0, 30, 60, 120, 180, 240].map((v) => `<button class="btn small" data-act="dayQuick" data-date="${date}" data-v="${v}">${v === 0 ? "休み" : fmtMin(v)}</button>`).join("")}
+    </div>
+    <div class="row">
+      <input type="number" id="dayMin" value="${cur}" min="0" step="10" data-enter="daySave" data-date="${date}"><span class="dim">分</span>
+      <button class="btn primary" data-act="daySave" data-date="${date}">保存</button>
+      ${isOv ? `<button class="btn" data-act="dayReset" data-date="${date}">いつもの${fmtMin(w)}に戻す</button>` : ""}
+    </div>`);
+}
+
+/* ===================== Gemini（無料枠・ブラウザ直叩き・429で自動モデル切替） ===================== */
+const MODELPOOL = ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.5-flash"];
+const AI_SCHEMA = {
+  type: "object",
+  properties: {
+    advice: { type: "string" },
+    capacityChanges: { type: "array", items: { type: "object",
+      properties: { date: { type: "string" }, minutes: { type: "integer" } }, required: ["date", "minutes"] } },
+    taskChanges: { type: "array", items: { type: "object",
+      properties: { taskId: { type: "string" }, newEstMin: { type: "integer" } }, required: ["taskId", "newEstMin"] } },
+  },
+  required: ["advice", "capacityChanges", "taskChanges"],
+};
+
+async function callGemini(prompt, schema, maxTokens = 4000) {
+  const apiKey = localStorage.getItem(LS_GEMINI_KEY);
+  if (!apiKey) throw new Error("NOKEY");
+  const pool = [S.settings.geminiModel, ...MODELPOOL.filter((m) => m !== S.settings.geminiModel)];
+  for (let mi = 0; mi < pool.length; mi++) {
+    const model = pool[mi];
+    const gc = { responseMimeType: "application/json", responseSchema: schema, maxOutputTokens: maxTokens };
+    if (/2\.5/.test(model)) gc.thinkingConfig = { thinkingBudget: 0 }; // 思考OFF指定は2.5系のみ対応
+    const body = { contents: [{ parts: [{ text: prompt }] }], generationConfig: gc };
+    const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + encodeURIComponent(apiKey);
+    let res;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (res.status !== 503 && res.status !== 500) break; // 高負荷は少し待って自動リトライ
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+    if (res.status === 429 && mi < pool.length - 1) continue; // 上限→自動で次のモデルへ
+    if (!res.ok) {
+      let msg = res.status + " " + res.statusText;
+      try { const e = await res.json(); msg = (e.error && e.error.message) || msg; } catch (_) {}
+      if (res.status === 400 && /API key|API_KEY/i.test(msg)) msg = "APIキーが無効です。設定を確認してください。";
+      if (res.status === 403) msg = "APIキーが無効か権限がありません。設定を確認してください。";
+      if (res.status === 429) msg = "無料枠の上限に達しました。しばらく待つか、明日また試してください（日本の昼ごろリセット）。";
+      if (res.status === 503 || res.status === 500) msg = "Geminiが一時的に混雑しています。数十秒おいて再試行してください。";
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    if (data.promptFeedback && data.promptFeedback.blockReason) throw new Error("応答がブロックされました。内容を変えて試してください。");
+    const cand = data.candidates && data.candidates[0];
+    const text = ((cand && cand.content && cand.content.parts) || []).map((p) => p.text).filter(Boolean).join("");
+    if (!text) throw new Error("応答を取得できませんでした。" + (cand && cand.finishReason ? " (" + cand.finishReason + ")" : ""));
+    if (model !== S.settings.geminiModel) { S.settings.geminiModel = model; store.save(S); } // 通ったモデルを次回優先
+    return JSON.parse(text);
+  }
+}
+
+function buildAiPrompt(userText) {
+  const today = todayStr();
+  const stateForAi = {
+    today,
+    semester: S.semester,
+    subjects: S.subjects.map((s) => ({ id: s.id, name: s.name })),
+    milestones: S.milestones.filter((m) => m.date >= today || S.tasks.some((t) => t.milestoneId === m.id && pendingOf(t) > 0))
+      .map((m) => ({ id: m.id, subjectId: m.subjectId, title: m.title, date: m.date, kind: m.kind })),
+    tasks: S.tasks.filter((t) => pendingOf(t) > 0)
+      .map((t) => ({ id: t.id, subjectId: t.subjectId, milestoneId: t.milestoneId, title: t.title, estMin: t.estMin, remainingMin: pendingOf(t) })),
+    capacity: {
+      weekly: S.capacity.weekly,
+      overrides: Object.fromEntries(Object.entries(S.capacity.overrides).filter(([d]) => d >= today)),
+    },
+    plannerWarnings: P.warnings,
+  };
+  return `あなたは大学生の学習計画コーチ。スタディプランナー「たてなおし」のAIアドバイザーとして応答する。
+状態JSONと計画エンジンの警告を読み、次を返すこと:
+- advice: 日本語で2〜4文の、現実的で具体的な助言。精神論ではなく数字に基づく。
+- capacityChanges: 特定の日の勉強時間(分)の上書き提案（例: 締切前日は増やす、疲労している週は減らす）。不要なら空配列。
+- taskChanges: タスクの見積もり分数(newEstMin)の調整提案。不要なら空配列。
+ルール:
+- タスクの完了状態・締切日は変更できない（提案しても無視される）。
+- 提案は控えめに。本当に必要な変更だけ。無理な詰め込みより「削る・減らす」提案を優先する。
+- 日付は YYYY-MM-DD 形式。今日(${today})より前の日付の変更は意味がない。
+
+状態JSON:
+${JSON.stringify(stateForAi, null, 1)}
+
+ユーザーの要望: ${userText || "現状を見て、必要なら計画を立て直す提案をして。"}`;
+}
+
+function openAiModal() {
+  const hasKey = !!localStorage.getItem(LS_GEMINI_KEY);
+  if (!hasKey) {
+    openModal(`<h3>AIと立て直す ✨</h3>
+      <p class="dim" style="margin-bottom:16px">Gemini（無料枠）のAPIキーを設定すると、状態を読んだAIが計画の引き直しを提案してくれます。キーがなくても再計画エンジン自体は常に動いています。</p>
+      <button class="btn primary" data-act="gotoSettings">設定でキーを入れる</button>`);
+    return;
+  }
+  openModal(`<h3>AIと立て直す ✨</h3>
+    <div class="row" style="margin-bottom:8px">
+      <button class="chip tap" data-act="aiPreset" data-text="崩れた計画を現実的に引き直して。">計画を引き直して</button>
+      <button class="chip tap" data-act="aiPreset" data-text="今週は忙しくて時間が取れない。減らす前提で提案して。">今週は忙しい</button>
+      <button class="chip tap" data-act="aiPreset" data-text="間に合わない警告が出ている。何を削るべき？">何を削るべき？</button>
+    </div>
+    <textarea id="aiText" rows="3" style="width:100%" placeholder="自由に相談（空でもOK）"></textarea>
+    <div class="row" style="margin-top:16px">
+      <button class="btn primary grow" data-act="aiSend">送信</button>
+    </div>
+    <div id="aiResult" style="margin-top:16px"></div>`);
+}
+
+let aiPendingChanges = null;
+async function aiConsult() {
+  const box = $("#aiResult");
+  const userText = ($("#aiText") || {}).value || "";
+  box.innerHTML = `<div class="dim"><span class="spin">🔄</span> 状態を読んで考えています…</div>`;
+  try {
+    const resp = await callGemini(buildAiPrompt(userText), AI_SCHEMA);
+    const v = advisorValidate(resp, S, todayStr());
+    if (!v.ok) {
+      box.innerHTML = `<div class="banner bad">応答を安全に適用できないため破棄しました。<br>${v.errors.map(esc).join("<br>")}</div>`;
+      return;
+    }
+    aiPendingChanges = v.changes;
+    let html = `<div class="banner info">💬 ${esc(v.advice)}</div>`;
+    if (v.changes.length === 0) {
+      html += `<p class="dim small">変更の提案はありません（今の計画のままでOK）。</p>`;
+    } else {
+      html += `<p class="small dim" style="margin:8px 0">提案された変更（承認するまで反映されません）:</p>`;
+      for (const c of v.changes) {
+        if (c.type === "capacity") {
+          const old = planner.capacityOn(c.date, S.capacity);
+          html += `<div class="diff">${mdLabel(c.date)} の勉強時間: <span class="old">${fmtMin(old)}</span> → <span class="new">${fmtMin(c.minutes)}</span></div>`;
+        } else {
+          const t = taskOf(c.taskId);
+          html += `<div class="diff">「${esc(t ? t.title : c.taskId)}」の見積もり: <span class="old">${fmtMin(t ? t.estMin : 0)}</span> → <span class="new">${fmtMin(c.newEstMin)}</span></div>`;
+        }
+      }
+      html += `<div class="row" style="margin-top:16px">
+        <button class="btn primary grow" data-act="aiApply">反映する</button>
+        <button class="btn grow" data-act="aiDiscard">破棄</button>
+      </div>`;
+    }
+    box.innerHTML = html;
+  } catch (err) {
+    if (err.message === "NOKEY") { openAiModal(); return; }
+    box.innerHTML = `<div class="banner bad">${esc(err.message)}</div>`;
+  }
+}
+
+/* ===================== actions（イベント委譲） ===================== */
+const ACTIONS = {
+  tab(d) { VIEW = d.tab; WEEK_OFF = 0; render(); },
+  weekOff(d) { WEEK_OFF = d.d === "0" ? 0 : WEEK_OFF + Number(d.d); render(); },
+
+  /* 今日 */
+  doneChunk(d) {
+    const t = taskOf(d.id);
+    if (!t) return;
+    const today = todayStr();
+    t.doneLog = t.doneLog || {};
+    t.doneLog[today] = (t.doneLog[today] | 0) + Number(d.min);
+    if (planner.remainingMin(t) <= 0) { t.done = true; t.doneDate = today; }
+    commit();
+    toast(t.done ? "タスク完了 🎉" : "今日の分を完了 ✔");
+  },
+  finishTask(d) {
+    const t = taskOf(d.id);
+    if (!t) return;
+    t.done = true; t.doneDate = todayStr();
+    commit();
+    toast("タスク完了 🎉");
+  },
+  undoToday(d) {
+    const t = taskOf(d.id);
+    if (!t) return;
+    if (t.doneLog) delete t.doneLog[todayStr()];
+    t.done = false; t.doneDate = null;
+    commit();
+  },
+  offToday() {
+    S.capacity.overrides[todayStr()] = 0;
+    commit();
+    toast("今日は休み。明日以降に配り直しました 🍵");
+  },
+  undoOffToday() {
+    delete S.capacity.overrides[todayStr()];
+    commit();
+  },
+
+  /* 週 */
+  dayEdit(d) { openDayModal(d.date); },
+  dayQuick(d) { S.capacity.overrides[d.date] = Number(d.v); closeModal(); commit(); },
+  daySave(d) {
+    const v = Number(($("#dayMin") || {}).value);
+    if (!Number.isFinite(v) || v < 0) return;
+    S.capacity.overrides[d.date] = Math.floor(v);
+    closeModal(); commit();
+  },
+  dayReset(d) { delete S.capacity.overrides[d.date]; closeModal(); commit(); },
+
+  /* 管理 */
+  addSubject() {
+    const el = $("#newSubjName");
+    const name = el.value.trim();
+    if (!name) { el.focus(); return; }
+    S.subjects.push({ id: uid("s"), name, color: PALETTE[S.subjects.length % PALETTE.length] });
+    commit();
+  },
+  delSubj(d) {
+    const subj = subjOf(d.id);
+    if (!subj) return;
+    const n = S.tasks.filter((t) => t.subjectId === d.id).length;
+    if (!confirm(`「${subj.name}」と配下の締切・タスク${n ? "（" + n + "件）" : ""}を削除します。よろしいですか？`)) return;
+    S.subjects = S.subjects.filter((s) => s.id !== d.id);
+    S.milestones = S.milestones.filter((m) => m.subjectId !== d.id);
+    S.tasks = S.tasks.filter((t) => t.subjectId !== d.id);
+    commit();
+  },
+  editSubj(d) {
+    const subj = subjOf(d.id);
+    openTextModal("科目名を変更", subj.name, (v) => { subj.name = v; });
+  },
+  addMs(d, el) {
+    const row = el.closest(".addrow");
+    const title = row.querySelector("input[type=text]").value.trim();
+    const date = row.querySelector("input[type=date]").value;
+    const kind = row.querySelector("select").value;
+    if (!title || !planner.isDateStr(date)) return;
+    const msId = uid("m");
+    S.milestones.push({ id: msId, subjectId: d.subj, title, date, kind });
+    // 締切日だけで今日ビューが機能するよう、ざっくりタスクを自動生成（あとから分割・削除できる）
+    S.tasks.push({ id: uid("t"), subjectId: d.subj, milestoneId: msId,
+                   title: title + "の対策", estMin: 180, done: false, doneDate: null, doneLog: {} });
+    commit();
+    toast("ざっくり180分のタスクを作りました。あとから分割できます");
+  },
+  delMs(d) {
+    const m = msOf(d.id);
+    if (!m) return;
+    const n = S.tasks.filter((t) => t.milestoneId === d.id).length;
+    if (!confirm(`「${m.title}」と配下のタスク${n ? "（" + n + "件）" : ""}を削除します。よろしいですか？`)) return;
+    S.milestones = S.milestones.filter((x) => x.id !== d.id);
+    S.tasks = S.tasks.filter((t) => t.milestoneId !== d.id);
+    commit();
+  },
+  editMs(d) {
+    const m = msOf(d.id);
+    openTextModal("締切名を変更", m.title, (v) => { m.title = v; });
+  },
+  addTask(d, el) {
+    const row = el.closest(".addrow");
+    const titleEl = row.querySelector("input[type=text]");
+    const title = titleEl.value.trim();
+    const est = Number(row.querySelector("input[type=number]").value) || 120;
+    if (!title) { titleEl.focus(); return; }
+    S.tasks.push({ id: uid("t"), subjectId: d.subj, milestoneId: d.ms || null,
+                   title, estMin: Math.max(5, Math.floor(est)), done: false, doneDate: null, doneLog: {} });
+    commit();
+  },
+  quickTask(d) {
+    const m = msOf(d.id);
+    if (!m) return;
+    S.tasks.push({ id: uid("t"), subjectId: m.subjectId, milestoneId: m.id,
+                   title: m.title + "の対策", estMin: 180, done: false, doneDate: null, doneLog: {} });
+    commit();
+    toast("あとから分割・調整できます");
+  },
+  delTask(d) {
+    const t = taskOf(d.id);
+    if (!t) return;
+    if (!confirm(`タスク「${t.title}」を削除します。よろしいですか？`)) return;
+    S.tasks = S.tasks.filter((x) => x.id !== d.id);
+    commit();
+  },
+  editTask(d) {
+    const t = taskOf(d.id);
+    openTextModal("タスク名を変更", t.title, (v) => { t.title = v; });
+  },
+  tmSave() {
+    const v = ($("#tmInput") || {}).value.trim();
+    if (v && textModalCb) { textModalCb(v); textModalCb = null; closeModal(); commit(); }
+  },
+
+  /* 設定 */
+  saveKey() {
+    const v = $("#gemKey").value.trim();
+    if (!v) return;
+    localStorage.setItem(LS_GEMINI_KEY, v);
+    toast("キーを保存しました");
+    render();
+  },
+  delKey() {
+    localStorage.removeItem(LS_GEMINI_KEY);
+    toast("キーを削除しました");
+    render();
+  },
+  exportDl() {
+    const blob = new Blob([store.exportJSON(S)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "tatenaoshi-backup-" + todayStr() + ".json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
+  async exportCopy() {
+    try { await navigator.clipboard.writeText(store.exportJSON(S)); toast("コピーしました"); }
+    catch (_) { toast("コピーできませんでした"); }
+  },
+  importOpen() {
+    openModal(`<h3>バックアップをインポート</h3>
+      <p class="dim small" style="margin-bottom:8px">現在のデータは<b>上書き</b>されます。JSONを貼り付けるかファイルを選択。</p>
+      <textarea id="impText" rows="6" style="width:100%" placeholder='{"version":1,...}'></textarea>
+      <div class="row" style="margin-top:8px">
+        <input type="file" id="impFile" accept=".json,application/json">
+        <button class="btn primary" data-act="importRun">インポート</button>
+      </div>`);
+    $("#impFile").addEventListener("change", async (e) => {
+      const f = e.target.files[0];
+      if (f) $("#impText").value = await f.text();
+    });
+  },
+  importRun() {
+    try {
+      const next = store.importJSON($("#impText").value);
+      if (!confirm("現在のデータを置き換えます。よろしいですか？")) return;
+      S = next;
+      closeModal(); commit();
+      toast("インポートしました");
+    } catch (err) {
+      toast("読み込めません: " + err.message);
+    }
+  },
+  wipe() {
+    if (!confirm("全データを削除します。よろしいですか？")) return;
+    if (!confirm("本当に削除しますか？（バックアップのダウンロードを推奨）")) return;
+    S = store.defaultState();
+    commit();
+    toast("全データを削除しました");
+  },
+  gotoSettings() { closeModal(); VIEW = "settings"; render(); },
+
+  /* AI */
+  openAi() { openAiModal(); },
+  aiPreset(d) { const el = $("#aiText"); if (el) el.value = d.text; },
+  aiSend() { aiConsult(); },
+  aiApply() {
+    for (const c of (aiPendingChanges || [])) {
+      if (c.type === "capacity") S.capacity.overrides[c.date] = c.minutes;
+      if (c.type === "estMin") { const t = taskOf(c.taskId); if (t) t.estMin = c.newEstMin; }
+    }
+    aiPendingChanges = null;
+    closeModal(); commit();
+    toast("計画を引き直しました 🔄");
+  },
+  aiDiscard() { aiPendingChanges = null; closeModal(); },
+};
+
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  const fn = ACTIONS[el.dataset.act];
+  if (fn) fn(el.dataset, el);
+});
+document.addEventListener("change", (e) => {
+  const el = e.target.closest("[data-chg]");
+  if (!el) return;
+  const v = el.value;
+  const chg = el.dataset.chg;
+  if (chg === "msDate") { const m = msOf(el.dataset.id); if (m && planner.isDateStr(v)) { m.date = v; commit(); } }
+  if (chg === "taskEst") { const t = taskOf(el.dataset.id); const n = Number(v); if (t && n >= 5) { t.estMin = Math.floor(n); commit(); } }
+  if (chg === "semName") { S.semester.name = v.trim(); commit(); }
+  if (chg === "semStart") { S.semester.start = v; commit(); }
+  if (chg === "semEnd") { S.semester.end = v; commit(); }
+  if (chg === "weekly") { const n = Math.max(0, Number(v) | 0); S.capacity.weekly[el.dataset.dow] = n; commit(); }
+  if (chg === "boundary") { S.settings.dayBoundaryHour = Number(v); commit(); }
+  if (chg === "gemModel") { S.settings.geminiModel = v; commit(); }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const el = e.target.closest("[data-enter]");
+  if (!el) return;
+  e.preventDefault();
+  const fn = ACTIONS[el.dataset.enter];
+  if (fn) fn(el.dataset, el);
+});
+
+/* 古い上書き（過去日のoverrides）は起動時に掃除して肥大化を防ぐ */
+(function cleanupOverrides() {
+  const today = todayStr();
+  const keep = {};
+  for (const [d, v] of Object.entries(S.capacity.overrides)) if (d >= today) keep[d] = v;
+  if (Object.keys(keep).length !== Object.keys(S.capacity.overrides).length) {
+    S.capacity.overrides = keep;
+    store.save(S);
+  }
+})();
+
+render();
+</script>
+</body>
+</html>
