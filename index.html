@@ -4,8 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="崩れた勉強計画を自動で引き直す、大学の学期用スタディプランナー。開いた瞬間に今日やることが立て直されている。">
-<title>たてなおし ― 崩れた計画を引き直すスタディプランナー</title>
+<title>ゆるスケ ― 崩れた勉強計画を自動で引き直すスタディプランナー</title>
+<meta name="theme-color" content="#0f1115">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
 :root{
   --bg:#0f1115; --panel:#171a21; --panel2:#1e222c; --line:#2a2f3a;
@@ -147,7 +152,7 @@ nav button.on{background:var(--accent); color:#0f1115; border-color:var(--accent
 <body>
 <div id="app">
   <header>
-    <h1>🔄 たてなおし</h1>
+    <h1>🔄 ゆるスケ</h1>
     <span class="sub" id="semLabel"></span>
   </header>
   <nav id="nav"></nav>
@@ -289,7 +294,8 @@ const planner = (() => {
 // ==STORE-START==
 const store = (() => {
   "use strict";
-  const LS_KEY = "tatenaoshi.state";
+  const LS_KEY = "yuru-suke.state";
+  const LEGACY_LS_KEY = "tatenaoshi.state"; // 旧名時代のデータを初回に引き継ぐ
   const CURRENT_VERSION = 1;
   const DEFAULT_WEEKLY = { mon: 120, tue: 120, wed: 120, thu: 120, fri: 120, sat: 180, sun: 180 };
   const GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.5-flash"];
@@ -359,7 +365,7 @@ const store = (() => {
     return out;
   }
   function load() {
-    try { return migrate(JSON.parse(localStorage.getItem(LS_KEY))); }
+    try { return migrate(JSON.parse(localStorage.getItem(LS_KEY) || localStorage.getItem(LEGACY_LS_KEY))); }
     catch (_) { return defaultState(); }
   }
   // プライベートブラウズ・クォータ超過では setItem が同期例外を投げる。
@@ -371,7 +377,7 @@ const store = (() => {
   const exportJSON = (s) => JSON.stringify(s, null, 2);
   function importJSON(text) {
     const obj = JSON.parse(text); // 壊れたJSONはここでthrow
-    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("たてなおしのバックアップJSONではありません");
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("ゆるスケのバックアップJSONではありません");
     return migrate(obj);
   }
   return { LS_KEY, CURRENT_VERSION, GEMINI_MODELS, defaultState, migrate, load, save, exportJSON, importJSON };
@@ -433,7 +439,9 @@ const uid = (p) => p + "-" + Math.random().toString(36).slice(2, 9) + Date.now()
 const KIND_LABEL = { exam: "試験", report: "レポート", quiz: "小テスト" };
 const DOW_JA = { mon: "月", tue: "火", wed: "水", thu: "木", fri: "金", sat: "土", sun: "日" };
 const PALETTE = ["#7aa2f7", "#9ece6a", "#f7768e", "#e0af68", "#bb9af7", "#7dcfff", "#ff9e64", "#73daca"];
-const LS_GEMINI_KEY = "tatenaoshi.geminiKey"; // キーはバックアップJSONに含めないため状態の外に置く
+const LS_GEMINI_KEY = "yuru-suke.geminiKey"; // キーはバックアップJSONに含めないため状態の外に置く
+// 旧名(たてなおし)時代に保存されたキーも読めるようにする
+const getGeminiKey = () => localStorage.getItem(LS_GEMINI_KEY) || localStorage.getItem("tatenaoshi.geminiKey");
 
 let S = store.load();
 let P = null;              // 最新のplan結果（毎render導出。保存しない）
@@ -726,7 +734,7 @@ function renderManage() {
 /* ---------- 設定 ---------- */
 function renderSettings() {
   const w = S.capacity.weekly;
-  const key = localStorage.getItem(LS_GEMINI_KEY) || "";
+  const key = getGeminiKey() || "";
   let html = `
   <div class="card"><h2>学期</h2>
     <div class="row" style="margin-bottom:8px">
@@ -782,7 +790,7 @@ function renderSettings() {
   <div class="card"><h2>危険な操作</h2>
     <button class="btn danger" data-act="wipe">全データを削除</button>
   </div>
-  <p class="dim small" style="text-align:center">たてなおし v1.0 ― 崩れた計画を引き直すスタディプランナー</p>`;
+  <p class="dim small" style="text-align:center">ゆるスケ v1.0 ― 崩れた勉強計画を自動で引き直すスタディプランナー</p>`;
   $("#view").innerHTML = html;
 }
 
@@ -841,7 +849,7 @@ const AI_SCHEMA = {
 };
 
 async function callGemini(prompt, schema, maxTokens = 4000) {
-  const apiKey = localStorage.getItem(LS_GEMINI_KEY);
+  const apiKey = getGeminiKey();
   if (!apiKey) throw new Error("NOKEY");
   const pool = [S.settings.geminiModel, ...MODELPOOL.filter((m) => m !== S.settings.geminiModel)];
   for (let mi = 0; mi < pool.length; mi++) {
@@ -896,7 +904,7 @@ function buildAiPrompt(userText) {
     },
     plannerWarnings: P.warnings,
   };
-  return `あなたは大学生の学習計画コーチ。スタディプランナー「たてなおし」のAIアドバイザーとして応答する。
+  return `あなたは大学生の学習計画コーチ。スタディプランナー「ゆるスケ」のAIアドバイザーとして応答する。
 状態JSONと計画エンジンの警告を読み、次を返すこと:
 - advice: 日本語で2〜4文の、現実的で具体的な助言。精神論ではなく数字に基づく。
 - capacityChanges: 特定の日の勉強時間(分)の上書き提案（例: 締切前日は増やす、疲労している週は減らす）。不要なら空配列。
@@ -913,7 +921,7 @@ ${JSON.stringify(stateForAi, null, 1)}
 }
 
 function openAiModal() {
-  const hasKey = !!localStorage.getItem(LS_GEMINI_KEY);
+  const hasKey = !!getGeminiKey();
   if (!hasKey) {
     openModal(`<h3>AIと立て直す ✨</h3>
       <p class="dim" style="margin-bottom:16px">Gemini（無料枠）のAPIキーを設定すると、状態を読んだAIが計画の引き直しを提案してくれます。キーがなくても再計画エンジン自体は常に動いています。</p>
@@ -1126,6 +1134,7 @@ const ACTIONS = {
   },
   delKey() {
     localStorage.removeItem(LS_GEMINI_KEY);
+    localStorage.removeItem("tatenaoshi.geminiKey");
     toast("キーを削除しました");
     render();
   },
@@ -1133,7 +1142,7 @@ const ACTIONS = {
     const blob = new Blob([store.exportJSON(S)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "tatenaoshi-backup-" + todayStr() + ".json";
+    a.download = "yuru-suke-backup-" + todayStr() + ".json";
     a.click();
     URL.revokeObjectURL(a.href);
   },
@@ -1237,6 +1246,11 @@ try {
     データが壊れている可能性があります。バックアップを保存してからリセットしてください。</div>
     <div class="row"><button class="btn" data-act="exportDl">バックアップをダウンロード</button>
     <button class="btn danger" data-act="wipe">全データを削除してやり直す</button></div>`;
+}
+
+// PWA: https配信時のみ登録（file://では不可）。ホーム画面追加＋オフラインでも開けるように
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
 }
 </script>
 </body>

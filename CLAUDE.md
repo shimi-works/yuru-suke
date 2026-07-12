@@ -1,10 +1,10 @@
-# CLAUDE.md — たてなおし (tatenaoshi)
+# CLAUDE.md — ゆるスケ (yuru-suke)
 
 ## このプロジェクト
 
-- 崩れた勉強計画を自動で引き直す、大学の学期用スタディプランナー（「記録」ではなく「再計画」のアプリ）
-- 構成: 単一HTMLファイル（`index.html` にHTML/CSS/JSをすべて内包）
-- 管理情報: `C:\Users\smzyt\apps\dev-os\projects\tatenaoshi\`（要件・設計・タスク・バグはそちらを参照）
+- 崩れた勉強計画を自動で引き直す、大学の学期用スタディプランナー（「記録」ではなく「再計画」のアプリ。旧名: たてなおし）
+- 構成: 単一HTMLファイル（`index.html` にHTML/CSS/JSをすべて内包）＋ PWA用の manifest / sw.js / icons
+- 管理情報: `C:\Users\smzyt\apps\dev-os\projects\yuru-suke\`（要件・設計・タスク・バグはそちらを参照）
 
 ## 開発標準
 
@@ -16,9 +16,10 @@
 - **planner / store / advisorValidate は純関数のまま維持**: `// ==PLANNER-START==` 等のマーカーで区切られたブロックはDOM・localStorage 非依存を保つ。`tests/planner.test.mjs` がこのブロックを抽出してNodeで実行する
 - **エンジンを触ったら必ず `node tests/planner.test.mjs`**（全通過するまで完了報告しない）
 - **AIは事実を改変できない**: Gemini応答で書き換えられるのは可処分時間の上書きと見積もり分数のみ。完了状態・締切日を書き換え可能にする変更は禁止。適用前の差分プレビュー→本人承認の3段ガードを外さない
-- APIキーをコードに書かない。キーは `tatenaoshi.geminiKey`（状態の外）に置き、バックアップJSONに含めない
+- APIキーをコードに書かない。キーは `yuru-suke.geminiKey`（状態の外）に置き、バックアップJSONに含めない
 - 日付は `"YYYY-MM-DD"` 文字列で保持・比較。Dateオブジェクトを状態に持ち込まない
-- localStorage スキーマ（`tatenaoshi.state`）を変えるときは `store.migrate` にバージョン変換を書く
+- localStorage スキーマ（`yuru-suke.state`）を変えるときは `store.migrate` にバージョン変換を書く。旧名キー `tatenaoshi.*` からの引き継ぎ読み込みを壊さない
+- sw.js のキャッシュ名 `yuru-suke-v1` は、配信物の構成を変えたらバージョンを上げる
 
 ## 動作確認
 
