@@ -22,8 +22,8 @@ const src =
   extract("// ==STORE-START==", "// ==STORE-END==") +
   extract("// ==ADVISOR-VALIDATE-START==", "// ==ADVISOR-VALIDATE-END==") +
   extract("// ==UTIL-START==", "// ==UTIL-END==");
-const { planner, store, advisorValidate, parseTaskLines, buildICS, milestoneProgress } = new Function(
-  src + "\nreturn { planner, store, advisorValidate, parseTaskLines, buildICS, milestoneProgress };"
+const { planner, store, advisorValidate, parseTaskLines, buildICS, milestoneProgress, reviewStats } = new Function(
+  src + "\nreturn { planner, store, advisorValidate, parseTaskLines, buildICS, milestoneProgress, reviewStats };"
 )();
 
 let pass = 0, fail = 0;
@@ -418,6 +418,48 @@ const TODAY = "2026-07-13"; // 月曜
 
   const allDone = milestoneProgress(mkState({ milestones: [ms("m3", "2026-07-25")], tasks: [task("d1", 60, "m3", true), task("d2", 30, "m3", true)] }), "m3");
   check("全完了はpct100・remain0", allDone.pct === 100 && allDone.remain === 0 && allDone.doneCount === 2);
+}
+
+// ---------- 16. reviewStats: タスクベースの振り返り（時間を使わない） ----------
+{
+  console.log("case: 16-review-stats");
+  const dtask = (id, msId, done, doneDate) => ({ id, subjectId: "s1", milestoneId: msId, title: id, estMin: 60, done, doneDate: doneDate || null, doneLog: {} });
+  const st = mkState({
+    milestones: [ms("mA", "2026-07-10"), ms("mB", "2026-07-11"), ms("mFut", "2026-07-20")],
+    tasks: [
+      dtask("tA1", "mA", true, "2026-07-09"), // 締切07-10までに完了
+      dtask("tA2", "mA", true, "2026-07-09"),
+      dtask("tB1", "mB", false, null),        // 過去締切だが未完了 → 遅れ
+      dtask("tF1", "mFut", true, "2026-07-12"),
+      dtask("tF2", "mFut", false, null),
+    ],
+  });
+  const R = reviewStats(st, TODAY); // TODAY = 2026-07-13
+
+  check("全タスク5・完了3・pct60", R.total === 5 && R.done === 3 && R.pct === 60, JSON.stringify({ t: R.total, d: R.done, p: R.pct }));
+  // 締切の結果
+  const byId = Object.fromEntries(R.deadlines.map((m) => [m.id, m]));
+  check("mA=間に合った", byId.mA.status === "ontime", byId.mA.status);
+  check("mB=遅れ（未完了が残る過去締切）", byId.mB.status === "late", byId.mB.status);
+  check("mFut=これから（未来）", byId.mFut.status === "upcoming", byId.mFut.status);
+  check("mFutの完了率50", byId.mFut.pct === 50, "" + byId.mFut.pct);
+  check("締切は日付昇順", R.deadlines[0].id === "mA" && R.deadlines[2].id === "mFut");
+  // 期限後に完了した場合は遅れ扱い（誠実さ）
+  const late = reviewStats(mkState({ milestones: [ms("mL", "2026-07-05")], tasks: [dtask("x", "mL", true, "2026-07-08")] }), TODAY);
+  check("期限後完了は遅れ", late.deadlines[0].status === "late", late.deadlines[0].status);
+  // 連続達成: 今日は未完、昨日(07-12)にtF1完了 → streak=1
+  check("streak=1（昨日から）", R.streak === 1, "streak=" + R.streak);
+  // 今日完了があれば今日を含む
+  const withToday = reviewStats(mkState({ milestones: [ms("mT", "2026-07-20")], tasks: [dtask("y1", "mT", true, TODAY), dtask("y2", "mT", true, "2026-07-12")] }), TODAY);
+  check("streak=2（今日+昨日）", withToday.streak === 2, "streak=" + withToday.streak);
+  // 14日ぶんの件数配列（末尾が今日）
+  check("days配列は14日ぶん", R.days.length === 14 && R.days[13].date === TODAY);
+  check("07-09に2件・07-12に1件", R.days.find((d) => d.date === "2026-07-09").count === 2 && R.days.find((d) => d.date === "2026-07-12").count === 1);
+  // 科目ごと
+  check("科目A: 3/5 pct60", R.bySubject.length === 1 && R.bySubject[0].done === 3 && R.bySubject[0].pct === 60);
+  // 空
+  const empty = reviewStats(mkState(), TODAY);
+  check("空はtotal0・streak0・締切0", empty.total === 0 && empty.streak === 0 && empty.deadlines.length === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
