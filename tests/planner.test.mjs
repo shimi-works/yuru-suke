@@ -20,9 +20,10 @@ function extract(startMark, endMark) {
 const src =
   extract("// ==PLANNER-START==", "// ==PLANNER-END==") +
   extract("// ==STORE-START==", "// ==STORE-END==") +
-  extract("// ==ADVISOR-VALIDATE-START==", "// ==ADVISOR-VALIDATE-END==");
-const { planner, store, advisorValidate } = new Function(
-  src + "\nreturn { planner, store, advisorValidate };"
+  extract("// ==ADVISOR-VALIDATE-START==", "// ==ADVISOR-VALIDATE-END==") +
+  extract("// ==UTIL-START==", "// ==UTIL-END==");
+const { planner, store, advisorValidate, parseTaskLines, buildICS } = new Function(
+  src + "\nreturn { planner, store, advisorValidate, parseTaskLines, buildICS };"
 )();
 
 let pass = 0, fail = 0;
@@ -331,6 +332,51 @@ const TODAY = "2026-07-13"; // 月曜
 
   const bad6 = advisorValidate({ advice: "x", capacityChanges: [{ date: "2020-01-01", minutes: 60 }], taskChanges: [] }, st, TODAY);
   check("過去日への変更を拒否", !bad6.ok);
+}
+
+// ---------- 13. parseTaskLines: 一括追加の行パース ----------
+{
+  console.log("case: 13-parse-task-lines");
+  const r = parseTaskLines("第3章 p45-60\n過去問 90\n\n  序論を書く 30分  \n第4章 p61-78 60", 120);
+  check("空行を除いて4件", r.length === 4, JSON.stringify(r));
+  check("末尾分なしは既定120", r[0].title === "第3章 p45-60" && r[0].estMin === 120, JSON.stringify(r[0]));
+  check("末尾数字を分に", r[1].title === "過去問" && r[1].estMin === 90, JSON.stringify(r[1]));
+  check("「分」付きも解釈", r[2].title === "序論を書く" && r[2].estMin === 30, JSON.stringify(r[2]));
+  check("途中のp61-78は範囲のまま末尾60が分", r[3].title === "第4章 p61-78" && r[3].estMin === 60, JSON.stringify(r[3]));
+  check("空文字は空配列", parseTaskLines("", 120).length === 0);
+  check("全角空白区切りも解釈", parseTaskLines("演習　45", 120)[0].estMin === 45);
+  check("5分未満は5に丸め", parseTaskLines("小問 1", 120)[0].estMin === 5);
+}
+
+// ---------- 14. buildICS: カレンダーエクスポート ----------
+{
+  console.log("case: 14-build-ics");
+  const stamp = "20260713T000000Z";
+  const st = mkState({
+    milestones: [ms("m1", "2026-07-18", "report")],
+    tasks: [task("t1", 120, "m1"), task("t2", 60, "m1", true)], // t2は完了済み
+  });
+  const ics = buildICS(st, { today: TODAY, horizonDays: 14, dtstamp: stamp, kindLabel: { report: "レポート" } });
+  check("VCALENDARで囲む", ics.startsWith("BEGIN:VCALENDAR") && ics.trimEnd().endsWith("END:VCALENDAR"));
+  check("CRLF改行", ics.includes("\r\n"));
+  check("締切イベントを含む", ics.includes("SUMMARY:📌 科目A 科目A") || /SUMMARY:📌 科目A/.test(ics), ics);
+  check("終日DTSTART形式", ics.includes("DTSTART;VALUE=DATE:20260718"));
+  check("DTSTAMPは引数値", ics.includes("DTSTAMP:" + stamp));
+  check("kindLabelを反映", ics.includes("（レポート）"));
+  check("残タスクt1をDESCRIPTIONに", /DESCRIPTION:.*t1/.test(ics));
+  check("完了t2は残りに出ない", !/DESCRIPTION:.*t2/.test(ics));
+  check("割り当て予定イベントを含む", ics.includes("📖 t1"));
+  // 特殊文字エスケープ
+  const st2 = mkState({ milestones: [{ id: "m9", subjectId: "s1", title: "A; B, C\nD", date: "2026-07-20", kind: "exam" }], tasks: [] });
+  const ics2 = buildICS(st2, { today: TODAY, horizonDays: 7, dtstamp: stamp, kindLabel: {} });
+  check("セミコロン/カンマ/改行をエスケープ", ics2.includes("A\\; B\\, C\\nD"), ics2);
+  // 過去の締切は出ない
+  const st3 = mkState({ milestones: [ms("mp", "2026-07-01", "exam")], tasks: [task("tp", 60, "mp")] });
+  const ics3 = buildICS(st3, { today: TODAY, horizonDays: 14, dtstamp: stamp, kindLabel: {} });
+  check("過去締切イベントは出ない", !ics3.includes("ms-mp@"));
+  // UIDが一意（重複行なし）
+  const uids = (ics.match(/UID:[^\r\n]+/g) || []);
+  check("UIDは重複しない", new Set(uids).size === uids.length, uids.join(","));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

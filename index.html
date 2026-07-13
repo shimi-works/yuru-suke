@@ -432,11 +432,98 @@ function advisorValidate(resp, state, today) {
 }
 // ==ADVISOR-VALIDATE-END==
 
+/* ===================== ユーティリティ（純関数・DOM非依存） ===================== */
+// ==UTIL-START==
+// 複数行テキスト → やること配列。各行の末尾に「 60」や「 60分」があれば見積もり分、なければ既定。
+// 「第3章 p45-60 60」→ {title:"第3章 p45-60", estMin:60} のように、末尾トークンだけを分数として解釈する。
+function parseTaskLines(text, defaultMin) {
+  const out = [];
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = line.match(/^(.*[^\s　])[\s　]+(\d{1,4})\s*分?$/); // 末尾の分数を分離（前にタイトルが残る場合のみ）
+    let title, est;
+    if (m) { title = m[1].trim(); est = Number(m[2]); }
+    else { title = line; est = defaultMin; }
+    out.push({ title, estMin: Math.max(5, Math.floor(est || defaultMin)) });
+  }
+  return out;
+}
+
+// 状態 → iCalendar(.ics) 文字列。締切（未来）と今日以降の割り当て予定を終日イベントで書き出す。
+// 片方向エクスポート専用（Googleカレンダー等に取り込む用途）。時刻を持たない設計に合わせ全て終日。
+// opts: { today, horizonDays, dtstamp, kindLabel } — dtstampはテスト再現性のため引数で受ける。
+function buildICS(state, opts) {
+  const today = opts.today;
+  const horizonDays = opts.horizonDays || 14;
+  const dtstamp = opts.dtstamp;
+  const kindLabel = opts.kindLabel || {};
+  const escText = (s) => String(s).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+  const ymd = (d) => d.replace(/-/g, "");
+  const subjName = (id) => { const s = (state.subjects || []).find((x) => x.id === id); return s ? s.name : ""; };
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//yuru-suke//JP//v1", "CALSCALE:GREGORIAN"];
+  const pushEvent = (uid, date, summary, desc) => {
+    lines.push("BEGIN:VEVENT", "UID:" + uid + "@yuru-suke",
+      "DTSTAMP:" + dtstamp, "DTSTART;VALUE=DATE:" + ymd(date),
+      "DTEND;VALUE=DATE:" + ymd(planner.addDays(date, 1)), "SUMMARY:" + escText(summary));
+    if (desc) lines.push("DESCRIPTION:" + escText(desc));
+    lines.push("END:VEVENT");
+  };
+  // 締切（今日以降）
+  for (const m of (state.milestones || [])) {
+    if (!planner.isDateStr(m.date) || m.date < today) continue;
+    const remain = (state.tasks || []).filter((t) => t.milestoneId === m.id && planner.remainingMin(t) > 0).map((t) => t.title);
+    const label = kindLabel[m.kind] ? "（" + kindLabel[m.kind] + "）" : "";
+    const sn = subjName(m.subjectId);
+    pushEvent("ms-" + m.id, m.date, "📌 " + (sn ? sn + " " : "") + m.title + label,
+      remain.length ? "残り: " + remain.join(" / ") : "");
+  }
+  // 割り当て予定（今日〜horizon）
+  const plan = planner.plan(state, today);
+  for (let i = 0; i < horizonDays; i++) {
+    const d = planner.addDays(today, i);
+    for (const c of (plan.assignments[d] || [])) {
+      const t = (state.tasks || []).find((x) => x.id === c.taskId);
+      if (!t) continue;
+      pushEvent("plan-" + d + "-" + c.taskId, d, "📖 " + t.title + "（" + c.min + "分）", subjName(t.subjectId));
+    }
+  }
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n");
+}
+// ==UTIL-END==
+
 /* ===================== UI 共通 ===================== */
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const uid = (p) => p + "-" + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 const KIND_LABEL = { exam: "試験", report: "レポート", quiz: "小テスト" };
+// 締切の種類ごとの初期タスク（やること）。レポートは工程、試験・小テストはざっくり1つ。
+// あとから一括追加・分割・削除できる前提の「叩き台」。
+const TASK_TEMPLATES = {
+  report: [
+    { title: "資料・文献を集める", estMin: 30 },
+    { title: "構成・アウトラインを決める", estMin: 30 },
+    { title: "本文を書く", estMin: 120 },
+    { title: "見直し・提出", estMin: 30 },
+  ],
+};
+function makeTemplateTasks(kind, msTitle) {
+  if (TASK_TEMPLATES[kind]) return TASK_TEMPLATES[kind].map((it) => ({ ...it }));
+  return [{ title: msTitle + " の対策", estMin: kind === "quiz" ? 60 : 180 }];
+}
+function newTask(subjId, msId, title, estMin) {
+  return { id: uid("t"), subjectId: subjId, milestoneId: msId || null,
+           title, estMin: Math.max(5, Math.floor(estMin)), done: false, doneDate: null, doneLog: {} };
+}
+function downloadFile(text, mime, filename) {
+  const blob = new Blob([text], { type: mime });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 const DOW_JA = { mon: "月", tue: "火", wed: "水", thu: "木", fri: "金", sat: "土", sun: "日" };
 const PALETTE = ["#7aa2f7", "#9ece6a", "#f7768e", "#e0af68", "#bb9af7", "#7dcfff", "#ff9e64", "#73daca"];
 const LS_GEMINI_KEY = "yuru-suke.geminiKey"; // キーはバックアップJSONに含めないため状態の外に置く
@@ -690,14 +777,15 @@ function renderManage() {
       }
       if (tasks.length === 0) {
         html += `<div class="row small" style="padding:4px 0">
-          <span class="dim">タスク未分割 →</span>
-          <button class="btn small" data-act="quickTask" data-id="${m.id}">まるごと1タスク作る（180分）</button>
+          <span class="dim">やること未登録 →</span>
+          <button class="btn small" data-act="quickTask" data-id="${m.id}">${m.kind === "report" ? "レポートの工程を入れる" : "叩き台を入れる"}</button>
         </div>`;
       }
       html += `<div class="addrow">
-        <input type="text" placeholder="タスク（例: 第3章の演習）" data-enter="addTask" data-ms="${m.id}" data-subj="${subj.id}">
-        <input type="number" value="120" min="5" step="5" title="見積もり(分)">
+        <input type="text" placeholder="やること（例: 第3章 p45-60）" data-enter="addTask" data-ms="${m.id}" data-subj="${subj.id}">
+        <input type="number" value="60" min="5" step="5" title="見積もり(分)">
         <button class="btn small" data-act="addTask" data-ms="${m.id}" data-subj="${subj.id}">＋</button>
+        <button class="btn small" data-act="openBulk" data-ms="${m.id}" data-subj="${subj.id}">📝 まとめて追加</button>
       </div>
       </div>`;
     }
@@ -778,6 +866,12 @@ function renderSettings() {
           `<option value="${m}" ${S.settings.geminiModel === m ? "selected" : ""}>${m}</option>`).join("")}
       </select>
     </div>
+  </div>
+  <div class="card"><h2>カレンダーに書き出す</h2>
+    <div class="row">
+      <button class="btn" data-act="exportIcs">.ics をダウンロード</button>
+    </div>
+    <p class="dim small" style="margin-top:8px">締切と今日以降2週間の予定を、Googleカレンダー等に取り込める形式（.ics）で書き出します。<b>片方向</b>（アプリ→カレンダー）です。予定を変えたら書き出し直してください。</p>
   </div>
   <div class="card"><h2>バックアップ</h2>
     <div class="row">
@@ -1069,11 +1163,11 @@ const ACTIONS = {
     if (!title || !planner.isDateStr(date)) return;
     const msId = uid("m");
     S.milestones.push({ id: msId, subjectId: d.subj, title, date, kind });
-    // 締切日だけで今日ビューが機能するよう、ざっくりタスクを自動生成（あとから分割・削除できる）
-    S.tasks.push({ id: uid("t"), subjectId: d.subj, milestoneId: msId,
-                   title: title + "の対策", estMin: 180, done: false, doneDate: null, doneLog: {} });
+    // 締切日だけで今日ビューが機能するよう、種類に応じた叩き台タスクを自動生成（あとから分割・削除できる）
+    for (const it of makeTemplateTasks(kind, title)) S.tasks.push(newTask(d.subj, msId, it.title, it.estMin));
     commit();
-    toast("ざっくり180分のタスクを作りました。あとから分割できます");
+    toast(kind === "report" ? "レポートの工程を入れました。範囲や分数は後で調整できます"
+                            : "叩き台のタスクを入れました。「まとめて追加」で分割できます");
   },
   delMs(d) {
     const m = msOf(d.id);
@@ -1096,17 +1190,30 @@ const ACTIONS = {
     const n = Number(rawEst);
     const est = rawEst.trim() === "" || !Number.isFinite(n) ? 120 : n; // 未入力だけ既定120。0等は下のclampで5分に
     if (!title) { titleEl.focus(); return; }
-    S.tasks.push({ id: uid("t"), subjectId: d.subj, milestoneId: d.ms || null,
-                   title, estMin: Math.max(5, Math.floor(est)), done: false, doneDate: null, doneLog: {} });
+    S.tasks.push(newTask(d.subj, d.ms, title, est));
     commit();
+  },
+  bulkAdd(d) {
+    const items = parseTaskLines(($("#bulkText") || {}).value || "", 60);
+    if (!items.length) { toast("追加するものがありません"); return; }
+    for (const it of items) S.tasks.push(newTask(d.subj, d.ms, it.title, it.estMin));
+    closeModal(); commit();
+    toast(items.length + "件のやることを追加しました");
+  },
+  openBulk(d) {
+    openModal(`<h3>やることをまとめて追加</h3>
+      <p class="dim small" style="margin-bottom:8px">1行に1つ。行の末尾に分を書けます（例: <b>第3章 p45-60 60</b>）。省略時は60分。範囲や小問など、そのまま書いてOKです。</p>
+      <textarea id="bulkText" rows="6" style="width:100%" placeholder="第3章 p45-60 60&#10;第4章 p61-78 60&#10;過去問2年ぶん 90"></textarea>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary grow" data-act="bulkAdd" data-ms="${d.ms || ""}" data-subj="${d.subj}">追加する</button>
+      </div>`);
   },
   quickTask(d) {
     const m = msOf(d.id);
     if (!m) return;
-    S.tasks.push({ id: uid("t"), subjectId: m.subjectId, milestoneId: m.id,
-                   title: m.title + "の対策", estMin: 180, done: false, doneDate: null, doneLog: {} });
+    for (const it of makeTemplateTasks(m.kind, m.title)) S.tasks.push(newTask(m.subjectId, m.id, it.title, it.estMin));
     commit();
-    toast("あとから分割・調整できます");
+    toast(m.kind === "report" ? "レポートの工程を入れました" : "叩き台を入れました。分割・調整できます");
   },
   delTask(d) {
     const t = taskOf(d.id);
@@ -1139,12 +1246,16 @@ const ACTIONS = {
     render();
   },
   exportDl() {
-    const blob = new Blob([store.exportJSON(S)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "yuru-suke-backup-" + todayStr() + ".json";
-    a.click();
-    URL.revokeObjectURL(a.href);
+    downloadFile(store.exportJSON(S), "application/json", "yuru-suke-backup-" + todayStr() + ".json");
+  },
+  exportIcs() {
+    const n = new Date();
+    const p2 = (x) => String(x).padStart(2, "0");
+    const stamp = n.getUTCFullYear() + p2(n.getUTCMonth() + 1) + p2(n.getUTCDate()) + "T" +
+      p2(n.getUTCHours()) + p2(n.getUTCMinutes()) + p2(n.getUTCSeconds()) + "Z";
+    const ics = buildICS(S, { today: todayStr(), horizonDays: 14, dtstamp: stamp, kindLabel: KIND_LABEL });
+    downloadFile(ics, "text/calendar", "yuru-suke-" + todayStr() + ".ics");
+    toast("カレンダーに取り込める .ics を書き出しました");
   },
   async exportCopy() {
     try { await navigator.clipboard.writeText(store.exportJSON(S)); toast("コピーしました"); }
