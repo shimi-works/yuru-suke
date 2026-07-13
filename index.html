@@ -150,6 +150,19 @@ nav button.on{background:var(--accent); color:#0f1115; border-color:var(--accent
 .diff .old{color:var(--dim); text-decoration:line-through}
 .diff .new{color:var(--ok); font-weight:700}
 
+.wstep{margin-bottom:16px}
+.wlabel{font-size:12px; color:var(--dim); margin-bottom:6px; font-weight:700}
+.seg{display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden}
+.seg-btn{flex:1; padding:9px 0; background:var(--panel2); color:var(--dim); border-right:1px solid var(--line)}
+.seg-btn:last-child{border-right:none}
+.seg-btn.on{background:var(--accent); color:#0f1115; font-weight:700}
+.wsubj.on{background:var(--accent); color:#0f1115; border-color:var(--accent)}
+.steps{counter-reset:step; text-align:left; max-width:280px; margin:0 auto 16px}
+.steps li{list-style:none; position:relative; padding:6px 0 6px 34px; color:var(--text)}
+.steps li::before{counter-increment:step; content:counter(step); position:absolute; left:0; top:6px;
+  width:22px; height:22px; border-radius:50%; background:var(--accent); color:#0f1115;
+  font-weight:700; font-size:12px; display:flex; align-items:center; justify-content:center}
+
 #toast{
   position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(80px);
   background:var(--panel2); border:1px solid var(--line); border-radius:99px;
@@ -715,8 +728,13 @@ function renderToday() {
 
   if (S.subjects.length === 0) {
     html += `<div class="card"><div class="empty">
-      まだ何も登録されていません。<br><b>科目名と締切日だけ</b>で始められます。<br><br>
-      <button class="btn primary" data-act="tab" data-tab="manage">科目を登録する</button>
+      <b style="font-size:15px;color:var(--text)">ようこそ 🔄</b>
+      <ol class="steps">
+        <li>試験やレポートを1つ登録</li>
+        <li>やること（範囲など）を書く<br><span class="dim small">レポートは工程が自動で入ります</span></li>
+        <li>「今日やること」が自動で出る</li>
+      </ol>
+      <button class="btn primary" data-act="wizOpen">＋ さっそく追加する</button>
     </div></div>`;
     $("#view").innerHTML = html;
     return;
@@ -726,7 +744,13 @@ function renderToday() {
   if (isOff) {
     html += `<div class="empty">今日はお休みにしています 🍵<br>分は明日以降に配り直し済み。</div>`;
   } else if (chunks.length === 0) {
-    html += `<div class="empty">${P.totalRemainingMin === 0 ? "全部終わっています。おつかれさま 🎉" : "今日の割当はありません。"}</div>`;
+    if (S.milestones.length === 0) {
+      // 科目はあるが締切がまだ無い＝今日やることが出ない。ここで次の一手を明確に示す
+      html += `<div class="empty">あと一歩 ―― <b>試験やレポートの締切</b>を足すと、ここに今日やることが出ます。<br><br>
+        <button class="btn primary" data-act="wizOpen">＋ 試験・レポートを追加</button></div>`;
+    } else {
+      html += `<div class="empty">${P.totalRemainingMin === 0 ? "全部終わっています。おつかれさま 🎉" : "今日の割当はありません。"}</div>`;
+    }
   } else {
     for (const c of chunks) {
       const t = taskOf(c.taskId);
@@ -833,13 +857,14 @@ function renderWeek() {
 
 /* ---------- 科目・締切管理 ---------- */
 function renderManage() {
-  let html = `<div class="card">
-    <h2>科目を追加</h2>
-    <div class="addrow">
+  // 主役は「試験・レポートを追加」ウィザード。1回の入力で科目・締切・やることまで入る
+  let html = `<button class="btn primary" style="width:100%; margin-bottom:16px; padding:12px" data-act="wizOpen">＋ 試験・レポートを追加</button>
+  <details class="card" style="margin-bottom:16px"><summary class="dim small" style="cursor:pointer">科目だけ先に作る</summary>
+    <div class="addrow" style="margin-top:8px">
       <input type="text" id="newSubjName" placeholder="科目名（例: 熱力学）" data-enter="addSubject">
-      <button class="btn primary" data-act="addSubject">追加</button>
+      <button class="btn" data-act="addSubject">追加</button>
     </div>
-  </div>`;
+  </details>`;
 
   for (const subj of S.subjects) {
     const mss = S.milestones.filter((m) => m.subjectId === subj.id)
@@ -890,6 +915,9 @@ function renderManage() {
       </div>`;
     }
 
+    if (mss.length === 0) {
+      html += `<div class="dim small" style="padding:4px 0 8px">この科目に、試験やレポートの締切を追加すると「やること」が入ります ↓</div>`;
+    }
     html += `<div class="addrow">
       <input type="text" placeholder="締切名（例: 中間試験）" data-enter="addMs" data-subj="${subj.id}">
       <input type="date" value="${planner.addDays(todayStr(), 14)}">
@@ -1088,6 +1116,38 @@ function openTextModal(title, value, onSave) {
   textModalCb = onSave;
 }
 let textModalCb = null;
+
+// 追加ウィザード: 科目・種類・締切・やることを1つのフォームで完結させる。
+// 「科目→締切→やること」の3段ネストを最初の一発で越えさせるのが狙い（分かりにくさの主因）。
+let wizSubjId = null, wizKind = "exam";
+function openAddWizard(preselectSubjId) {
+  wizSubjId = preselectSubjId || null;
+  wizKind = "exam";
+  const chips = S.subjects.map((s) =>
+    `<button class="chip tap wsubj ${wizSubjId === s.id ? "on" : ""}" data-act="wizPickSubj" data-id="${s.id}">${esc(s.name)}</button>`).join("");
+  openModal(`<h3>試験・レポートを追加</h3>
+    <div class="wstep"><div class="wlabel">1. どの科目？</div>
+      <div class="row" style="flex-wrap:wrap">${chips || `<span class="dim small">まだ科目がありません。下に入力してください。</span>`}</div>
+      <input type="text" id="wizNewSubj" placeholder="＋ 新しい科目名（例: 熱力学）" style="margin-top:8px; width:100%">
+    </div>
+    <div class="wstep"><div class="wlabel">2. 種類は？</div>
+      <div class="seg">
+        <button class="seg-btn on" data-act="wizPickKind" data-k="exam">試験</button>
+        <button class="seg-btn" data-act="wizPickKind" data-k="report">レポート</button>
+        <button class="seg-btn" data-act="wizPickKind" data-k="quiz">小テスト</button>
+      </div>
+    </div>
+    <div class="wstep"><div class="wlabel">3. 名前と締切日</div>
+      <div class="row">
+        <input type="text" id="wizTitle" class="grow" placeholder="例: 中間試験（空欄OK）">
+        <input type="date" id="wizDate" value="${planner.addDays(todayStr(), 14)}">
+      </div>
+    </div>
+    <div class="wstep"><div class="wlabel">4. やること（あとでOK）</div>
+      <textarea id="wizTasks" rows="3" style="width:100%" placeholder="1行に1つ（例: 第3章 p45-60）&#10;空欄なら、種類に合わせた叩き台が自動で入ります"></textarea>
+    </div>
+    <button class="btn primary" style="width:100%" data-act="wizSubmit">これで追加する</button>`);
+}
 
 function openDayModal(date) {
   const w = S.capacity.weekly[planner.dayOfWeek(date)];
@@ -1308,6 +1368,39 @@ const ACTIONS = {
     closeModal(); commit();
   },
   dayReset(d) { delete S.capacity.overrides[d.date]; closeModal(); commit(); },
+
+  /* 追加ウィザード */
+  wizOpen(d) { openAddWizard(d && d.id); },
+  wizPickSubj(d) {
+    wizSubjId = d.id;
+    document.querySelectorAll(".wsubj").forEach((b) => b.classList.toggle("on", b.dataset.id === d.id));
+    const ns = $("#wizNewSubj"); if (ns) ns.value = ""; // 既存を選んだら新規欄はクリア
+  },
+  wizPickKind(d, el) {
+    wizKind = d.k;
+    document.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("on", b === el));
+  },
+  wizSubmit() {
+    const newName = (($("#wizNewSubj") || {}).value || "").trim();
+    let subjId = wizSubjId;
+    if (newName) { // 新規科目が入力されていれば優先して作成
+      const s = { id: uid("s"), name: newName, color: PALETTE[S.subjects.length % PALETTE.length] };
+      S.subjects.push(s); subjId = s.id;
+    }
+    if (!subjId) { toast("科目を選ぶか、新しい科目名を入れてください"); return; }
+    const date = ($("#wizDate") || {}).value;
+    if (!planner.isDateStr(date)) { toast("締切日を入れてください"); return; }
+    const title = (($("#wizTitle") || {}).value || "").trim() || KIND_LABEL[wizKind];
+    const msId = uid("m");
+    S.milestones.push({ id: msId, subjectId: subjId, title, date, kind: wizKind });
+    const bulk = (($("#wizTasks") || {}).value || "").trim();
+    const items = bulk ? parseTaskLines(bulk, 60) : makeTemplateTasks(wizKind, title);
+    for (const it of items) S.tasks.push(newTask(subjId, msId, it.title, it.estMin));
+    closeModal();
+    VIEW = "today"; // 成果（今日やること）をすぐ見せて流れを理解してもらう
+    commit();
+    toast("追加しました。「今日」に今日やることが出ました");
+  },
 
   /* 管理 */
   addSubject() {
