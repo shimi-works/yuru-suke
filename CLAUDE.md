@@ -13,7 +13,9 @@
 ## このプロジェクト固有のルール（重要）
 
 - **設計原則「再計画はボタンではなく常時」を崩さない**: 割当（assignments）は保存せず、開くたびに planner が状態から導出する。割当を保存するコードを書かない（driftの温床）
-- **planner / store / advisorValidate は純関数のまま維持**: `// ==PLANNER-START==` 等のマーカーで区切られたブロックはDOM・localStorage 非依存を保つ。`tests/planner.test.mjs` がこのブロックを抽出してNodeで実行する
+- **planner / store / advisorValidate / parseTaskLines / buildICS は純関数のまま維持**: `// ==PLANNER-START==`〜`==UTIL-END==` のマーカーで区切られたブロックはDOM・localStorage 非依存を保つ。`tests/planner.test.mjs` がこのブロックを抽出してNodeで実行する
+- **やること＝タスクがチェックリストの実体**: 締切(milestone)の下のタスク群がチェックリスト。専用のサブ項目データ構造は持たない（一情報一箇所）。締切種類別の初期タスクは `makeTemplateTasks`
+- **.icsは片方向エクスポート専用**: buildICSは状態を読むだけ。ICSインポート（双方向同期）は設計外（OAuth/サーバーが必要になり完全ローカルの前提を壊す）
 - **エンジンを触ったら必ず `node tests/planner.test.mjs`**（全通過するまで完了報告しない）
 - **AIは事実を改変できない**: Gemini応答で書き換えられるのは可処分時間の上書きと見積もり分数のみ。完了状態・締切日を書き換え可能にする変更は禁止。適用前の差分プレビュー→本人承認の3段ガードを外さない
 - APIキーをコードに書かない。キーは `yuru-suke.geminiKey`（状態の外）に置き、バックアップJSONに含めない
