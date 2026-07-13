@@ -22,8 +22,8 @@ const src =
   extract("// ==STORE-START==", "// ==STORE-END==") +
   extract("// ==ADVISOR-VALIDATE-START==", "// ==ADVISOR-VALIDATE-END==") +
   extract("// ==UTIL-START==", "// ==UTIL-END==");
-const { planner, store, advisorValidate, parseTaskLines, buildICS } = new Function(
-  src + "\nreturn { planner, store, advisorValidate, parseTaskLines, buildICS };"
+const { planner, store, advisorValidate, parseTaskLines, buildICS, milestoneProgress } = new Function(
+  src + "\nreturn { planner, store, advisorValidate, parseTaskLines, buildICS, milestoneProgress };"
 )();
 
 let pass = 0, fail = 0;
@@ -396,6 +396,28 @@ const TODAY = "2026-07-13"; // 月曜
   // 折り畳み後も論理的に復元できる（継続行= CRLF+空白 を畳み直すと元の論理行）
   const unfolded = icsL.replace(/\r\n /g, "");
   check("折り畳みを畳み直すと締切SUMMARYが復元", unfolded.includes("SUMMARY:📌 科目A mL（レポート）"), unfolded.slice(0, 200));
+}
+
+// ---------- 15. milestoneProgress: 締切ごとの進捗 ----------
+{
+  console.log("case: 15-milestone-progress");
+  const t1 = task("t1", 60, "m1");
+  const t2 = task("t2", 60, "m1", true); t2.doneLog = { "2026-07-12": 60 };
+  const t3 = task("t3", 120, "m1"); t3.doneLog = { "2026-07-12": 30 }; // 部分進捗
+  const st = mkState({ milestones: [ms("m1", "2026-07-25")], tasks: [t1, t2, t3] });
+  const p = milestoneProgress(st, "m1");
+  check("総見積もり=240", p.total === 240, "total=" + p.total);
+  check("残り=150（t1 60 + t3 90）", p.remain === 150, "remain=" + p.remain);
+  check("消化=90（t2 60 + t3 30）", p.done === 90, "done=" + p.done);
+  check("pct=38（90/240四捨五入）", p.pct === 38, "pct=" + p.pct);
+  check("タスク数=3", p.taskCount === 3);
+  check("完了タスク数=1（t2のみ）", p.doneCount === 1, "doneCount=" + p.doneCount);
+
+  const empty = milestoneProgress(mkState({ milestones: [ms("m2", "2026-07-25")], tasks: [] }), "m2");
+  check("タスクなしはpct0・件数0", empty.pct === 0 && empty.taskCount === 0 && empty.total === 0);
+
+  const allDone = milestoneProgress(mkState({ milestones: [ms("m3", "2026-07-25")], tasks: [task("d1", 60, "m3", true), task("d2", 30, "m3", true)] }), "m3");
+  check("全完了はpct100・remain0", allDone.pct === 100 && allDone.remain === 0 && allDone.doneCount === 2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

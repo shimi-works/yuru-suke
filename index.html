@@ -111,6 +111,12 @@ nav button.on{background:var(--accent); color:#0f1115; border-color:var(--accent
 .badge.report{background:rgba(224,175,104,.15); color:var(--warn)}
 .badge.quiz{background:rgba(122,162,247,.15); color:var(--accent)}
 
+.prog{display:flex; align-items:center; gap:8px; margin-top:6px}
+.prog .track{flex:1; height:6px; border-radius:99px; background:var(--panel2); overflow:hidden}
+.prog .fill{height:100%; border-radius:99px; background:var(--ok); transition:width .25s ease}
+.prog .fill.done{background:var(--ok)}
+.prog .pct{font-size:11px; color:var(--dim); white-space:nowrap; min-width:64px; text-align:right}
+
 .addrow{display:flex; gap:8px; margin-top:8px; flex-wrap:wrap}
 .addrow input[type=text]{flex:1; min-width:120px}
 .subj-head{display:flex; align-items:center; gap:8px; margin-bottom:8px}
@@ -509,6 +515,18 @@ function buildICS(state, opts) {
   lines.push("END:VCALENDAR");
   return lines.map(fold).join("\r\n") + "\r\n"; // 各行を折り畳み、末尾もCRLFで終端（RFC5545）
 }
+
+// 締切ごとの進捗（見積もり分ベース）。完了状態と残量から導出する派生値。
+// pct は「消化した見積もり分の割合」= (総見積もり − 残量) / 総見積もり。タスクが無ければ 0。
+function milestoneProgress(state, milestoneId) {
+  const tasks = (state.tasks || []).filter((t) => t.milestoneId === milestoneId);
+  const total = tasks.reduce((a, t) => a + Math.max(0, t.estMin | 0), 0);
+  const remain = tasks.reduce((a, t) => a + planner.remainingMin(t), 0);
+  const done = Math.max(0, total - remain);
+  const doneCount = tasks.filter((t) => planner.remainingMin(t) <= 0).length;
+  return { total, done, remain, pct: total > 0 ? Math.round((done / total) * 100) : 0,
+           taskCount: tasks.length, doneCount };
+}
 // ==UTIL-END==
 
 /* ===================== UI 共通 ===================== */
@@ -569,6 +587,16 @@ function fmtMin(m) {
 function mdLabel(d) {
   const [, m, day] = d.split("-");
   return Number(m) + "/" + Number(day) + "(" + DOW_JA[planner.dayOfWeek(d)] + ")";
+}
+// 締切の進捗バー（milestoneProgressの結果を受けてHTML片を返す）。タスク未登録なら何も出さない
+function progressBar(prog) {
+  if (prog.taskCount === 0) return "";
+  const complete = prog.remain <= 0;
+  const label = complete ? "完了 🎉" : prog.pct + "%（" + prog.doneCount + "/" + prog.taskCount + "）";
+  return `<div class="prog">
+    <div class="track"><div class="fill ${complete ? "done" : ""}" style="width:${prog.pct}%"></div></div>
+    <span class="pct">${label}</span>
+  </div>`;
 }
 function daysLeft(d) {
   return Math.round((Date.parse(d + "T00:00:00Z") - Date.parse(todayStr() + "T00:00:00Z")) / 86400000);
@@ -693,11 +721,14 @@ function renderToday() {
     for (const m of upcoming) {
       const subj = subjOf(m.subjectId);
       const dl = daysLeft(m.date);
-      html += `<div class="mrow">
-        <span class="badge ${m.kind}">${KIND_LABEL[m.kind] || ""}</span>
-        <span class="grow">${subj ? esc(subj.name) + " " : ""}${esc(m.title)}</span>
-        <span class="dim">${mdLabel(m.date)}</span>
-        <b style="color:${dl <= 3 ? "var(--danger)" : "var(--accent)"}">${dl === 0 ? "今日" : "D-" + dl}</b>
+      html += `<div style="padding:4px 0">
+        <div class="mrow" style="padding:0">
+          <span class="badge ${m.kind}">${KIND_LABEL[m.kind] || ""}</span>
+          <span class="grow">${subj ? esc(subj.name) + " " : ""}${esc(m.title)}</span>
+          <span class="dim">${mdLabel(m.date)}</span>
+          <b style="color:${dl <= 3 ? "var(--danger)" : "var(--accent)"}">${dl === 0 ? "今日" : "D-" + dl}</b>
+        </div>
+        ${progressBar(milestoneProgress(S, m.id))}
       </div>`;
     }
     html += `</div>`;
@@ -782,7 +813,8 @@ function renderManage() {
           <span class="dim small">${dl >= 0 ? (dl === 0 ? "今日" : "D-" + dl) : "終了"}</span>
           <span class="grow"></span>
           <button class="xbtn" data-act="delMs" data-id="${m.id}">削除</button>
-        </div>`;
+        </div>
+        ${progressBar(milestoneProgress(S, m.id))}`;
       for (const t of tasks) {
         html += `<div class="task">
           <div class="tmain">
