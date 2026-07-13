@@ -346,6 +346,10 @@ const TODAY = "2026-07-13"; // 月曜
   check("空文字は空配列", parseTaskLines("", 120).length === 0);
   check("全角空白区切りも解釈", parseTaskLines("演習　45", 120)[0].estMin === 45);
   check("5分未満は5に丸め", parseTaskLines("小問 1", 120)[0].estMin === 5);
+  check("明示的な0も5に丸め（既定に化けない）", parseTaskLines("小問 0", 60)[0].estMin === 5, JSON.stringify(parseTaskLines("小問 0", 60)[0]));
+  check("0分表記も5", parseTaskLines("小問 0分", 60)[0].estMin === 5);
+  check("上限1440でクランプ", parseTaskLines("巨大 9999", 60)[0].estMin === 1440);
+  check("単独\\rの改行も分割", parseTaskLines("A 30\rB 40", 60).length === 2);
 }
 
 // ---------- 14. buildICS: カレンダーエクスポート ----------
@@ -359,7 +363,9 @@ const TODAY = "2026-07-13"; // 月曜
   const ics = buildICS(st, { today: TODAY, horizonDays: 14, dtstamp: stamp, kindLabel: { report: "レポート" } });
   check("VCALENDARで囲む", ics.startsWith("BEGIN:VCALENDAR") && ics.trimEnd().endsWith("END:VCALENDAR"));
   check("CRLF改行", ics.includes("\r\n"));
-  check("締切イベントを含む", ics.includes("SUMMARY:📌 科目A 科目A") || /SUMMARY:📌 科目A/.test(ics), ics);
+  check("末尾もCRLFで終端", ics.endsWith("END:VCALENDAR\r\n"));
+  // 締切SUMMARYは「📌 科目名 締切名（種類）」の順で結合される（titleを落とすと壊れる）
+  check("締切SUMMARYが正しい形", ics.includes("SUMMARY:📌 科目A m1（レポート）"), ics);
   check("終日DTSTART形式", ics.includes("DTSTART;VALUE=DATE:20260718"));
   check("DTSTAMPは引数値", ics.includes("DTSTAMP:" + stamp));
   check("kindLabelを反映", ics.includes("（レポート）"));
@@ -377,6 +383,19 @@ const TODAY = "2026-07-13"; // 月曜
   // UIDが一意（重複行なし）
   const uids = (ics.match(/UID:[^\r\n]+/g) || []);
   check("UIDは重複しない", new Set(uids).size === uids.length, uids.join(","));
+
+  // 長大DESCRIPTION（一括追加で残タスクが積み上がるケース）でも各物理行が75オクテット以内に折られる
+  const many = mkState({
+    milestones: [ms("mL", "2026-07-30", "report")],
+    tasks: Array.from({ length: 20 }, (_, i) => task("bt" + i, 30, "mL")).map((t, i) => ({ ...t, title: "第" + (i + 1) + "章 演習問題を解いてノートにまとめる" })),
+  });
+  const icsL = buildICS(many, { today: TODAY, horizonDays: 21, dtstamp: stamp, kindLabel: { report: "レポート" } });
+  const enc = new TextEncoder();
+  const overLong = icsL.split("\r\n").filter((l) => enc.encode(l).length > 75);
+  check("全物理行が75オクテット以内", overLong.length === 0, "over=" + overLong.length + " 最長=" + Math.max(0, ...icsL.split("\r\n").map((l) => enc.encode(l).length)));
+  // 折り畳み後も論理的に復元できる（継続行= CRLF+空白 を畳み直すと元の論理行）
+  const unfolded = icsL.replace(/\r\n /g, "");
+  check("折り畳みを畳み直すと締切SUMMARYが復元", unfolded.includes("SUMMARY:📌 科目A mL（レポート）"), unfolded.slice(0, 200));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -434,18 +434,25 @@ function advisorValidate(resp, state, today) {
 
 /* ===================== ユーティリティ（純関数・DOM非依存） ===================== */
 // ==UTIL-START==
+// 見積もり分の共通クランプ: 5〜1440分（1日）に収める。0や非数値・誤入力の桁数を安全側に丸める。
+function clampMin(m) {
+  const n = Math.floor(Number(m));
+  if (!Number.isFinite(n) || n < 5) return 5;
+  return Math.min(1440, n);
+}
+
 // 複数行テキスト → やること配列。各行の末尾に「 60」や「 60分」があれば見積もり分、なければ既定。
 // 「第3章 p45-60 60」→ {title:"第3章 p45-60", estMin:60} のように、末尾トークンだけを分数として解釈する。
 function parseTaskLines(text, defaultMin) {
   const out = [];
-  for (const raw of String(text).split(/\r?\n/)) {
+  for (const raw of String(text).split(/\r\n|\r|\n/)) { // 単独\r(旧Mac)も改行として扱う
     const line = raw.trim();
     if (!line) continue;
     const m = line.match(/^(.*[^\s　])[\s　]+(\d{1,4})\s*分?$/); // 末尾の分数を分離（前にタイトルが残る場合のみ）
     let title, est;
-    if (m) { title = m[1].trim(); est = Number(m[2]); }
+    if (m) { title = m[1].trim(); est = Number(m[2]); } // 「0分」も明示指定として尊重（clampMinで5に）
     else { title = line; est = defaultMin; }
-    out.push({ title, estMin: Math.max(5, Math.floor(est || defaultMin)) });
+    out.push({ title, estMin: clampMin(est) });
   }
   return out;
 }
@@ -459,6 +466,17 @@ function buildICS(state, opts) {
   const dtstamp = opts.dtstamp;
   const kindLabel = opts.kindLabel || {};
   const escText = (s) => String(s).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+  // RFC5545の行折り畳み: 1物理行75オクテット以内に収める。マルチバイト（日本語）を壊さないよう文字境界で折る。
+  const enc = new TextEncoder();
+  const fold = (line) => {
+    let out = "", len = 0;
+    for (const ch of Array.from(line)) {
+      const clen = enc.encode(ch).length;
+      if (len + clen > 74) { out += "\r\n "; len = 1; } // 継続行は先頭の空白1オクテットから
+      out += ch; len += clen;
+    }
+    return out;
+  };
   const ymd = (d) => d.replace(/-/g, "");
   const subjName = (id) => { const s = (state.subjects || []).find((x) => x.id === id); return s ? s.name : ""; };
   const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//yuru-suke//JP//v1", "CALSCALE:GREGORIAN"];
@@ -489,7 +507,7 @@ function buildICS(state, opts) {
     }
   }
   lines.push("END:VCALENDAR");
-  return lines.join("\r\n");
+  return lines.map(fold).join("\r\n") + "\r\n"; // 各行を折り畳み、末尾もCRLFで終端（RFC5545）
 }
 // ==UTIL-END==
 
@@ -514,7 +532,7 @@ function makeTemplateTasks(kind, msTitle) {
 }
 function newTask(subjId, msId, title, estMin) {
   return { id: uid("t"), subjectId: subjId, milestoneId: msId || null,
-           title, estMin: Math.max(5, Math.floor(estMin)), done: false, doneDate: null, doneLog: {} };
+           title, estMin: clampMin(estMin), done: false, doneDate: null, doneLog: {} };
 }
 function downloadFile(text, mime, filename) {
   const blob = new Blob([text], { type: mime });
