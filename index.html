@@ -217,21 +217,34 @@ const planner = (() => {
   const dayOfWeek = (s) => DOW[new Date(toUTC(s)).getUTCDay()];
   const isDateStr = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(toUTC(s));
 
-  function capacityOn(date, capacity) {
-    const ov = (capacity && capacity.overrides) || {};
+  // 既定は「タスクモード」= 1日に何件こなすかで配る（時間の概算を強要しない）。
+  // 時間モード（settings.timeMode）をONにすると、分の見積もりで配る従来の挙動になる。
+  const isTimeMode = (state) => !!(state && state.settings && state.settings.timeMode);
+
+  // 1日にこなせる量。時間モード=分、タスクモード=件数。単位が違うだけで役割は同じ
+  function capacityOn(date, capacity, timeMode) {
+    const c = capacity || {};
+    const ov = (timeMode ? c.overrides : c.overridesTasks) || {};
     if (Object.prototype.hasOwnProperty.call(ov, date)) return Math.max(0, ov[date] | 0);
-    return Math.max(0, ((capacity && capacity.weekly) || {})[dayOfWeek(date)] | 0);
+    const weekly = (timeMode ? c.weekly : c.weeklyTasks) || {};
+    return Math.max(0, weekly[dayOfWeek(date)] | 0);
   }
-  // 残量 = 見積もり − 日別実績(doneLog)の合計。done=true は残量0
+  // 残量 = 見積もり − 日別実績(doneLog)の合計。done=true は残量0（時間モードでのみ使う）
   function remainingMin(task) {
     if (task.done) return 0;
     const spent = Object.values(task.doneLog || {}).reduce((a, v) => a + (v | 0), 0);
     return Math.max(0, (task.estMin | 0) - spent);
   }
+  // タスクのコスト（配分の単位）。時間モード=残り分、タスクモード=1件
+  function costOf(task, timeMode) {
+    if (task.done) return 0;
+    return timeMode ? remainingMin(task) : 1;
+  }
 
-  // (state, today) → { assignments: {date:[{taskId,min}]}, warnings, totalRemainingMin }
+  // (state, today) → { assignments: {date:[{taskId,cost}]}, warnings, totalRemaining, timeMode }
   // 割当は保存しない派生値。開くたびにこれが走るだけで繰越が完了する（再計画はボタンではなく常時）
   function plan(state, today) {
+    const timeMode = isTimeMode(state);
     const warnings = [];
     const msById = new Map((state.milestones || []).map((m) => [m.id, m]));
     const semEnd = state.semester && isDateStr(state.semester.end) ? state.semester.end : addDays(today, 60);
@@ -241,7 +254,7 @@ const planner = (() => {
       .map((t) => {
         const m = t.milestoneId ? msById.get(t.milestoneId) : null;
         const raw = m && isDateStr(m.date) ? m.date : semEnd;
-        return { id: t.id, est: remainingMin(t), milestoneId: m ? m.id : null,
+        return { id: t.id, est: costOf(t, timeMode), milestoneId: m ? m.id : null,
                  deadline: raw < today ? today : raw, rawDeadline: raw };
       })
       .filter((p) => p.est > 0);
@@ -256,12 +269,14 @@ const planner = (() => {
       }
     }
 
-    if (pending.length === 0) return { assignments: {}, warnings, totalRemainingMin: 0 };
+    if (pending.length === 0) return { assignments: {}, warnings, totalRemaining: 0, timeMode };
 
-    // 今日の実績分は今日の容量から差し引く（チェック済みの時間に新タスクを二重に詰めない）
-    const doneToday = (state.tasks || []).reduce((a, t) => a + (((t.doneLog || {})[today]) | 0), 0);
+    // 今日こなした分は今日の容量から差し引く（済んだ枠に新タスクを二重に詰めない）
+    const doneToday = timeMode
+      ? (state.tasks || []).reduce((a, t) => a + (((t.doneLog || {})[today]) | 0), 0)
+      : (state.tasks || []).filter((t) => t.done && t.doneDate === today).length;
     const capOn = (d) => {
-      const c = capacityOn(d, state.capacity || {});
+      const c = capacityOn(d, state.capacity || {}, timeMode);
       return d === today ? Math.max(0, c - doneToday) : c;
     };
 
@@ -286,7 +301,7 @@ const planner = (() => {
         const cands = pending.filter((p) => p.milestoneId === m.id)
           .sort((a, b) => b.est - a.est).slice(0, 3).map((p) => p.id);
         warnings.push({ type: "infeasible", milestoneId: m.id, title: m.title, date: m.date,
-                        shortfallMin: cumReq - avail, reduceCandidates: cands });
+                        shortfall: cumReq - avail, reduceCandidates: cands });
       }
     }
 
@@ -301,9 +316,10 @@ const planner = (() => {
       let cap = capOn(d);
       while (cap > 0 && qi < queue.length) {
         const t = queue[qi];
-        if (cap < MIN_CHUNK_MIN && t.remain > cap) break; // 細切れ回避: 数分の枠に無理に詰めない
+        // 細切れ回避は時間モードのみ（タスクモードはコスト1なので分割自体が起きない）
+        if (timeMode && cap < MIN_CHUNK_MIN && t.remain > cap) break;
         const chunk = Math.min(cap, t.remain);
-        (assignments[d] = assignments[d] || []).push({ taskId: t.id, min: chunk });
+        (assignments[d] = assignments[d] || []).push({ taskId: t.id, cost: chunk });
         cap -= chunk;
         t.remain -= chunk;
         if (t.remain === 0) qi++;
@@ -312,13 +328,13 @@ const planner = (() => {
     const leftover = queue.slice(qi).filter((t) => t.remain > 0);
     if (leftover.length) {
       warnings.push({ type: "overflow", taskIds: leftover.map((t) => t.id),
-                      totalMin: leftover.reduce((a, t) => a + t.remain, 0) });
+                      total: leftover.reduce((a, t) => a + t.remain, 0) });
     }
-    return { assignments, warnings,
-             totalRemainingMin: pending.reduce((a, p) => a + p.est, 0) };
+    return { assignments, warnings, timeMode,
+             totalRemaining: pending.reduce((a, p) => a + p.est, 0) };
   }
 
-  return { effectiveToday, addDays, dayOfWeek, isDateStr, capacityOn, remainingMin, plan, MIN_CHUNK_MIN };
+  return { effectiveToday, addDays, dayOfWeek, isDateStr, capacityOn, remainingMin, costOf, isTimeMode, plan, MIN_CHUNK_MIN };
 })();
 // ==PLANNER-END==
 
@@ -330,6 +346,8 @@ const store = (() => {
   const LEGACY_LS_KEY = "tatenaoshi.state"; // 旧名時代のデータを初回に引き継ぐ
   const CURRENT_VERSION = 1;
   const DEFAULT_WEEKLY = { mon: 120, tue: 120, wed: 120, thu: 120, fri: 120, sat: 180, sun: 180 };
+  // 既定（タスクモード）の1日あたり件数。時間の概算なしで配るための容量
+  const DEFAULT_WEEKLY_TASKS = { mon: 2, tue: 2, wed: 2, thu: 2, fri: 2, sat: 4, sun: 4 };
   const GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.5-flash"];
   const MILESTONE_KINDS = ["exam", "report", "quiz"];
   const COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
@@ -343,8 +361,9 @@ const store = (() => {
       subjects: [],
       milestones: [],
       tasks: [],
-      capacity: { weekly: { ...DEFAULT_WEEKLY }, overrides: {} },
-      settings: { dayBoundaryHour: 3, geminiModel: GEMINI_MODELS[0] },
+      capacity: { weekly: { ...DEFAULT_WEEKLY }, overrides: {},
+                  weeklyTasks: { ...DEFAULT_WEEKLY_TASKS }, overridesTasks: {} },
+      settings: { dayBoundaryHour: 3, geminiModel: GEMINI_MODELS[0], timeMode: false },
     };
   }
   // 欠損・不正フィールドを既定値で補完しつつ全フィールドを型付きで再構築する。
@@ -372,20 +391,27 @@ const store = (() => {
       doneLog: isObj(t.doneLog) ? { ...t.doneLog } : {},
     }));
     const cap = isObj(s.capacity) ? s.capacity : {};
-    const wk = isObj(cap.weekly) ? cap.weekly : {};
-    out.capacity = { weekly: {}, overrides: {} };
-    for (const k of Object.keys(DEFAULT_WEEKLY)) {
-      out.capacity.weekly[k] = k in wk ? Math.max(0, wk[k] | 0) : DEFAULT_WEEKLY[k];
-    }
-    const ov = isObj(cap.overrides) ? cap.overrides : {};
-    for (const k of Object.keys(ov)) {
-      if (/^\d{4}-\d{2}-\d{2}$/.test(k)) out.capacity.overrides[k] = Math.max(0, ov[k] | 0);
-    }
+    out.capacity = { weekly: {}, overrides: {}, weeklyTasks: {}, overridesTasks: {} };
+    const fillWeekly = (srcObj, defObj, dest) => {
+      const w = isObj(srcObj) ? srcObj : {};
+      for (const k of Object.keys(defObj)) dest[k] = k in w ? Math.max(0, w[k] | 0) : defObj[k];
+    };
+    fillWeekly(cap.weekly, DEFAULT_WEEKLY, out.capacity.weekly);
+    fillWeekly(cap.weeklyTasks, DEFAULT_WEEKLY_TASKS, out.capacity.weeklyTasks);
+    const fillOverrides = (srcObj, dest) => {
+      const o = isObj(srcObj) ? srcObj : {};
+      for (const k of Object.keys(o)) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(k)) dest[k] = Math.max(0, o[k] | 0);
+      }
+    };
+    fillOverrides(cap.overrides, out.capacity.overrides);
+    fillOverrides(cap.overridesTasks, out.capacity.overridesTasks);
     const st = isObj(s.settings) ? s.settings : {};
     out.settings = {
       dayBoundaryHour: Number.isInteger(st.dayBoundaryHour) && st.dayBoundaryHour >= 0 && st.dayBoundaryHour <= 23
         ? st.dayBoundaryHour : d.settings.dayBoundaryHour,
       geminiModel: GEMINI_MODELS.includes(st.geminiModel) ? st.geminiModel : d.settings.geminiModel,
+      timeMode: !!st.timeMode, // 既定OFF＝ただのタスク管理
     };
     return out;
   }
@@ -522,7 +548,7 @@ function buildICS(state, opts) {
   // 締切（今日以降）
   for (const m of (state.milestones || [])) {
     if (!planner.isDateStr(m.date) || m.date < today) continue;
-    const remain = (state.tasks || []).filter((t) => t.milestoneId === m.id && planner.remainingMin(t) > 0).map((t) => t.title);
+    const remain = (state.tasks || []).filter((t) => t.milestoneId === m.id && planner.costOf(t, planner.isTimeMode(state)) > 0).map((t) => t.title);
     const label = kindLabel[m.kind] ? "（" + kindLabel[m.kind] + "）" : "";
     const sn = subjName(m.subjectId);
     pushEvent("ms-" + m.id, m.date, "📌 " + (sn ? sn + " " : "") + m.title + label,
@@ -535,7 +561,8 @@ function buildICS(state, opts) {
     for (const c of (plan.assignments[d] || [])) {
       const t = (state.tasks || []).find((x) => x.id === c.taskId);
       if (!t) continue;
-      pushEvent("plan-" + d + "-" + c.taskId, d, "📖 " + t.title + "（" + c.min + "分）", subjName(t.subjectId));
+      const label = plan.timeMode ? t.title + "（" + c.cost + "分）" : t.title;
+      pushEvent("plan-" + d + "-" + c.taskId, d, "📖 " + label, subjName(t.subjectId));
     }
   }
   lines.push("END:VCALENDAR");
@@ -586,14 +613,16 @@ function reviewStats(state, today) {
   return { total, done, pct: total ? Math.round((done / total) * 100) : 0, days, streak, bySubject, deadlines };
 }
 
-// 締切ごとの進捗（見積もり分ベース）。完了状態と残量から導出する派生値。
-// pct は「消化した見積もり分の割合」= (総見積もり − 残量) / 総見積もり。タスクが無ければ 0。
+// 締切ごとの進捗。既定（タスクモード）は件数ベース、時間モードは見積もり分ベース。
+// pct は「消化した割合」= (総量 − 残量) / 総量。タスクが無ければ 0。
 function milestoneProgress(state, milestoneId) {
+  const timeMode = planner.isTimeMode(state);
   const tasks = (state.tasks || []).filter((t) => t.milestoneId === milestoneId);
-  const total = tasks.reduce((a, t) => a + Math.max(0, t.estMin | 0), 0);
-  const remain = tasks.reduce((a, t) => a + planner.remainingMin(t), 0);
+  const sizeOf = (t) => (timeMode ? Math.max(0, t.estMin | 0) : 1);
+  const total = tasks.reduce((a, t) => a + sizeOf(t), 0);
+  const remain = tasks.reduce((a, t) => a + planner.costOf(t, timeMode), 0);
   const done = Math.max(0, total - remain);
-  const doneCount = tasks.filter((t) => planner.remainingMin(t) <= 0).length;
+  const doneCount = tasks.filter((t) => planner.costOf(t, timeMode) <= 0).length;
   return { total, done, remain, pct: total > 0 ? Math.round((done / total) * 100) : 0,
            taskCount: tasks.length, doneCount };
 }
@@ -658,6 +687,12 @@ function mdLabel(d) {
   const [, m, day] = d.split("-");
   return Number(m) + "/" + Number(day) + "(" + DOW_JA[planner.dayOfWeek(d)] + ")";
 }
+// 既定はタスクモード（件数）。設定で時間モードにすると分で扱う
+const timeMode = () => planner.isTimeMode(S);
+const fmtCost = (c) => (timeMode() ? fmtMin(c) : (c | 0) + "件");
+const capOnToday = (d) => planner.capacityOn(d, S.capacity, timeMode());
+// 例外日の上書き先はモードで別（分と件数を混ぜない）
+const ovMapNow = () => (timeMode() ? S.capacity.overrides : S.capacity.overridesTasks);
 // 締切の進捗バー（milestoneProgressの結果を受けてHTML片を返す）。タスク未登録なら何も出さない
 function progressBar(prog) {
   if (prog.taskCount === 0) return "";
@@ -674,7 +709,7 @@ function daysLeft(d) {
 const subjOf = (id) => S.subjects.find((s) => s.id === id);
 const msOf = (id) => S.milestones.find((m) => m.id === id);
 const taskOf = (id) => S.tasks.find((t) => t.id === id);
-const pendingOf = (t) => planner.remainingMin(t);
+const pendingOf = (t) => planner.costOf(t, timeMode());
 
 let toastTimer = null;
 function toast(msg) {
@@ -701,13 +736,13 @@ function renderBanner() {
   const html = P.warnings.map((w) => {
     if (w.type === "infeasible") {
       const cands = (w.reduceCandidates || []).map((id) => taskOf(id)).filter(Boolean).map((t) => "「" + esc(t.title) + "」");
-      return `<div class="banner bad">⚠ <b>${esc(w.title)}</b>（${mdLabel(w.date)}）に約 <b>${fmtMin(w.shortfallMin)}</b> 足りません。範囲を削るか時間を増やしてください。${cands.length ? "削る候補: " + cands.join(" ") : ""}</div>`;
+      return `<div class="banner bad">⚠ <b>${esc(w.title)}</b>（${mdLabel(w.date)}）までに <b>${fmtCost(w.shortfall)}</b> 入り切りません。やることを減らすか、1日の${timeMode() ? "勉強時間" : "件数"}を増やしてください。${cands.length ? "減らす候補: " + cands.join(" ") : ""}</div>`;
     }
     if (w.type === "overdue") {
       return `<div class="banner warn">「${esc(w.title)}」の締切（${mdLabel(w.date)}）を過ぎています。未完了分は今日以降に再配分済みです。</div>`;
     }
     if (w.type === "overflow") {
-      return `<div class="banner warn">学期末までに入り切らないタスクが ${w.taskIds.length} 件（${fmtMin(w.totalMin)}）あります。可処分時間か学期終了日を見直してください。</div>`;
+      return `<div class="banner warn">学期末までに入り切らないやることが ${w.taskIds.length} 件あります。1日の${timeMode() ? "勉強時間" : "件数"}か学期終了日を見直してください。</div>`;
     }
     return "";
   }).join("");
@@ -717,20 +752,23 @@ function renderBanner() {
 /* ---------- 今日ビュー ---------- */
 function renderToday() {
   const today = todayStr();
+  const tm = timeMode();
   const chunks = P.assignments[today] || [];
-  const capRaw = planner.capacityOn(today, S.capacity);
+  const capRaw = capOnToday(today);
+  // 時間モード: 今日ログした分があるもの / タスクモード: 今日完了にしたもの
   const doneEntries = S.tasks
-    .filter((t) => ((t.doneLog || {})[today] | 0) > 0 || t.doneDate === today)
+    .filter((t) => (tm ? ((t.doneLog || {})[today] | 0) > 0 : false) || t.doneDate === today)
     .map((t) => ({ t, min: (t.doneLog || {})[today] | 0 }));
-  const doneMin = doneEntries.reduce((a, e) => a + e.min, 0);
-  const planMin = chunks.reduce((a, c) => a + c.min, 0);
-  const isOff = capRaw === 0 && Object.prototype.hasOwnProperty.call(S.capacity.overrides, today);
+  const doneCost = tm ? doneEntries.reduce((a, e) => a + e.min, 0) : doneEntries.length;
+  const planCost = chunks.reduce((a, c) => a + c.cost, 0);
+  const ovMap = tm ? S.capacity.overrides : S.capacity.overridesTasks;
+  const isOff = capRaw === 0 && Object.prototype.hasOwnProperty.call(ovMap, today);
 
   let html = `
     <div class="stats">
-      <div class="stat"><div class="v">${fmtMin(planMin)}</div><div class="k">今日やる</div></div>
-      <div class="stat"><div class="v">${fmtMin(doneMin)}</div><div class="k">今日やった</div></div>
-      <div class="stat"><div class="v">${fmtMin(P.totalRemainingMin)}</div><div class="k">全体の残り</div></div>
+      <div class="stat"><div class="v">${fmtCost(planCost)}</div><div class="k">今日やる</div></div>
+      <div class="stat"><div class="v">${fmtCost(doneCost)}</div><div class="k">今日やった</div></div>
+      <div class="stat"><div class="v">${fmtCost(P.totalRemaining)}</div><div class="k">全体の残り</div></div>
     </div>`;
 
   if (S.subjects.length === 0) {
@@ -756,7 +794,7 @@ function renderToday() {
       html += `<div class="empty">あと一歩 ―― <b>試験やレポートの締切</b>を足すと、ここに今日やることが出ます。<br><br>
         <button class="btn primary" data-act="wizOpen">＋ 試験・レポートを追加</button></div>`;
     } else {
-      html += `<div class="empty">${P.totalRemainingMin === 0 ? "全部終わっています。おつかれさま 🎉" : "今日の割当はありません。"}</div>`;
+      html += `<div class="empty">${P.totalRemaining === 0 ? "全部終わっています。おつかれさま 🎉" : "今日の割当はありません。"}</div>`;
     }
   } else {
     for (const c of chunks) {
@@ -765,16 +803,17 @@ function renderToday() {
       const subj = subjOf(t.subjectId);
       const m = t.milestoneId ? msOf(t.milestoneId) : null;
       const remain = pendingOf(t);
-      const split = remain > c.min ? `（全体の残り ${fmtMin(remain)} のうち）` : "";
+      // 分割が起きるのは時間モードだけ（タスクモードは1件まるごと）
+      const split = tm && remain > c.cost ? `（全体の残り ${fmtMin(remain)} のうち）` : "";
       html += `<div class="task">
-        <button class="check" data-act="doneChunk" data-id="${t.id}" data-min="${c.min}" title="この分を完了"></button>
+        <button class="check" data-act="${tm ? "doneChunk" : "finishTask"}" data-id="${t.id}" data-min="${c.cost}" title="完了にする"></button>
         <div class="cbar" style="background:${subj ? subj.color : "#555"}"></div>
         <div class="tmain">
           <div class="ttitle">${esc(t.title)}</div>
           <div class="tmeta">${subj ? esc(subj.name) : ""}${m ? " ・ " + esc(m.title) + " " + mdLabel(m.date) : ""} ${split}</div>
         </div>
-        <span class="tmin">${fmtMin(c.min)}</span>
-        ${remain > c.min ? `<button class="xbtn" data-act="finishTask" data-id="${t.id}" title="タスク全体を完了にする">全部✔</button>` : ""}
+        ${tm ? `<span class="tmin">${fmtMin(c.cost)}</span>` : ""}
+        ${tm && remain > c.cost ? `<button class="xbtn" data-act="finishTask" data-id="${t.id}" title="タスク全体を完了にする">全部✔</button>` : ""}
       </div>`;
     }
   }
@@ -788,7 +827,7 @@ function renderToday() {
         <button class="check done" data-act="undoToday" data-id="${t.id}">✔</button>
         <div class="cbar" style="background:${subj ? subj.color : "#555"}"></div>
         <div class="tmain"><div class="ttitle done">${esc(t.title)}</div></div>
-        <span class="tmin">${min ? fmtMin(min) : "完了"}</span>
+        <span class="tmin">${tm && min ? fmtMin(min) : "完了"}</span>
       </div>`;
     }
     html += `</div>`;
@@ -832,30 +871,33 @@ function renderWeek() {
     <button class="btn small" data-act="weekOff" data-d="-1">‹ 前の7日</button>
     <button class="btn small ${WEEK_OFF === 0 ? "primary" : ""}" data-act="weekOff" data-d="0">今日から</button>
     <button class="btn small" data-act="weekOff" data-d="1">次の7日 ›</button>
-    <span class="dim small grow" style="text-align:right">日付タップで時間変更</span>
+    <span class="dim small grow" style="text-align:right">日付タップで${timeMode() ? "時間" : "件数"}変更</span>
   </div>`;
 
+  const tm = timeMode();
   for (let i = 0; i < 7; i++) {
     const d = planner.addDays(start, i);
-    const cap = planner.capacityOn(d, S.capacity);
-    const isOverride = Object.prototype.hasOwnProperty.call(S.capacity.overrides, d);
+    const cap = capOnToday(d);
+    const isOverride = Object.prototype.hasOwnProperty.call(tm ? S.capacity.overrides : S.capacity.overridesTasks, d);
     const msToday = S.milestones.filter((m) => m.date === d);
     const chunks = d >= today ? (P.assignments[d] || []) : [];
-    const actual = S.tasks.reduce((a, t) => a + (((t.doneLog || {})[d]) | 0), 0);
+    // 過去日の実績: 時間モードは分、タスクモードは完了件数
+    const actual = tm ? S.tasks.reduce((a, t) => a + (((t.doneLog || {})[d]) | 0), 0)
+                      : S.tasks.filter((t) => t.done && t.doneDate === d).length;
     html += `<div class="day">
       <div class="dayhead">
         <span class="dname">${mdLabel(d)}</span>
         ${d === today ? '<span class="today-mark">今日</span>' : ""}
-        <span class="chip tap" data-act="dayEdit" data-date="${d}">${cap === 0 ? "休み" : fmtMin(cap)}${isOverride ? " ✎" : ""}</span>
+        <span class="chip tap" data-act="dayEdit" data-date="${d}">${cap === 0 ? "休み" : fmtCost(cap)}${isOverride ? " ✎" : ""}</span>
         ${msToday.map((m) => `<span class="badge ${m.kind}">${KIND_LABEL[m.kind]} ${esc(m.title)}</span>`).join("")}
-        ${d < today && actual ? `<span class="chip">実績 ${fmtMin(actual)}</span>` : ""}
+        ${d < today && actual ? `<span class="chip">実績 ${fmtCost(actual)}</span>` : ""}
       </div>
       <div class="daybody">${chunks.map((c) => {
         const t = taskOf(c.taskId);
         if (!t) return "";
         const subj = subjOf(t.subjectId);
         return `<div class="mrow"><span style="color:${subj ? subj.color : "#888"}">●</span>
-          <span class="grow">${esc(t.title)}</span><span class="dim">${fmtMin(c.min)}</span></div>`;
+          <span class="grow">${esc(t.title)}</span>${tm ? `<span class="dim">${fmtMin(c.cost)}</span>` : ""}</div>`;
       }).join("")}</div>
     </div>`;
   }
@@ -864,6 +906,7 @@ function renderWeek() {
 
 /* ---------- 科目・締切管理 ---------- */
 function renderManage() {
+  const tm = timeMode();
   // 主役は「試験・レポートを追加」ウィザード。1回の入力で科目・締切・やることまで入る
   let html = `<button class="btn primary" style="width:100%; margin-bottom:16px; padding:12px" data-act="wizOpen">＋ 試験・レポートを追加</button>
   <details class="card" style="margin-bottom:16px"><summary class="dim small" style="cursor:pointer">科目だけ先に作る</summary>
@@ -902,8 +945,8 @@ function renderManage() {
           <div class="tmain">
             <button class="ttitle ${t.done ? "done" : ""}" data-act="editTask" data-id="${t.id}" title="名前を変更">${esc(t.title)}</button>
           </div>
-          <input type="number" value="${t.estMin}" min="5" step="5" data-chg="taskEst" data-id="${t.id}" title="見積もり(分)">
-          <span class="dim small">分</span>
+          ${tm ? `<input type="number" value="${t.estMin}" min="5" step="5" data-chg="taskEst" data-id="${t.id}" title="見積もり(分)">
+          <span class="dim small">分</span>` : ""}
           <button class="xbtn" data-act="delTask" data-id="${t.id}">×</button>
         </div>`;
       }
@@ -915,7 +958,7 @@ function renderManage() {
       }
       html += `<div class="addrow">
         <input type="text" placeholder="やること（例: 第3章 p45-60）" data-enter="addTask" data-ms="${m.id}" data-subj="${subj.id}">
-        <input type="number" value="60" min="5" step="5" title="見積もり(分)">
+        ${tm ? `<input type="number" value="60" min="5" step="5" title="見積もり(分)">` : ""}
         <button class="btn small" data-act="addTask" data-ms="${m.id}" data-subj="${subj.id}">＋</button>
         <button class="btn small" data-act="openBulk" data-ms="${m.id}" data-subj="${subj.id}">📝 まとめて追加</button>
       </div>
@@ -938,8 +981,8 @@ function renderManage() {
       for (const t of freeTasks) {
         html += `<div class="task">
           <div class="tmain"><button class="ttitle ${t.done ? "done" : ""}" data-act="editTask" data-id="${t.id}">${esc(t.title)}</button></div>
-          <input type="number" value="${t.estMin}" min="5" step="5" data-chg="taskEst" data-id="${t.id}">
-          <span class="dim small">分</span>
+          ${tm ? `<input type="number" value="${t.estMin}" min="5" step="5" data-chg="taskEst" data-id="${t.id}">
+          <span class="dim small">分</span>` : ""}
           <button class="xbtn" data-act="delTask" data-id="${t.id}">×</button>
         </div>`;
       }
@@ -1032,7 +1075,8 @@ function renderReview() {
 
 /* ---------- 設定 ---------- */
 function renderSettings() {
-  const w = S.capacity.weekly;
+  const tm = timeMode();
+  const w = tm ? S.capacity.weekly : S.capacity.weeklyTasks;
   const key = getGeminiKey() || "";
   let html = `
   <div class="card"><h2>学期</h2>
@@ -1045,13 +1089,23 @@ function renderSettings() {
     </div>
     <p class="dim small" style="margin-top:8px">締切のないタスクは学期終了日までに配分されます。</p>
   </div>
-  <div class="card"><h2>曜日ごとの勉強時間（分）</h2>
+  <div class="card"><h2>曜日ごとに${tm ? "やれる時間（分）" : "やれる件数"}</h2>
     <div class="row">
       ${["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((d) =>
         `<label style="text-align:center"><span class="dim small">${DOW_JA[d]}</span><br>
-         <input type="number" style="width:64px" value="${w[d]}" min="0" step="10" data-chg="weekly" data-dow="${d}"></label>`).join("")}
+         <input type="number" style="width:64px" value="${w[d]}" min="0" step="${tm ? 10 : 1}" data-chg="weekly" data-dow="${d}"></label>`).join("")}
     </div>
-    <p class="dim small" style="margin-top:8px">バイトや休みの日は、週ビューで日付ごとに上書きできます。</p>
+    <p class="dim small" style="margin-top:8px">この上限までやることが自動で配られます。バイトや休みの日は、週ビューで日付ごとに上書きできます。</p>
+  </div>
+  <div class="card"><h2>時間で管理する（上級）</h2>
+    <label class="row" style="cursor:pointer">
+      <input type="checkbox" data-chg="timeMode" ${tm ? "checked" : ""} style="width:18px;height:18px">
+      <span class="grow">やることに「かかる時間」を見積もって配る</span>
+    </label>
+    <p class="dim small" style="margin-top:8px">
+      <b>OFF（おすすめ）</b>: ただのタスク管理。件数だけで自動的に配られ、時間の概算は不要です。<br>
+      <b>ON</b>: 各やることに分を見積もり、1日の勉強時間に収まるよう配ります（長いものは自動で複数日に分割）。
+    </p>
   </div>
   <div class="card"><h2>日付の境界</h2>
     <div class="row">
@@ -1152,22 +1206,26 @@ function openAddWizard(preselectSubjId) {
     </div>
     <div class="wstep"><div class="wlabel">4. やること（あとでOK）</div>
       <textarea id="wizTasks" rows="3" style="width:100%" placeholder="1行に1つ（例: 第3章 p45-60）&#10;空欄なら、種類に合わせた叩き台が自動で入ります"></textarea>
+      <p class="dim small" style="margin-top:6px">${timeMode() ? "行の末尾に分を書けます（例: 第3章 p45-60 60）" : "時間の入力は不要です。締切までに自動で振り分けます"}</p>
     </div>
     <button class="btn primary" style="width:100%" data-act="wizSubmit">これで追加する</button>`);
 }
 
 function openDayModal(date) {
-  const w = S.capacity.weekly[planner.dayOfWeek(date)];
-  const isOv = Object.prototype.hasOwnProperty.call(S.capacity.overrides, date);
-  const cur = planner.capacityOn(date, S.capacity);
-  openModal(`<h3>${mdLabel(date)} の勉強時間</h3>
+  const tm = timeMode();
+  const dow = planner.dayOfWeek(date);
+  const w = tm ? S.capacity.weekly[dow] : S.capacity.weeklyTasks[dow];
+  const isOv = Object.prototype.hasOwnProperty.call(tm ? S.capacity.overrides : S.capacity.overridesTasks, date);
+  const cur = capOnToday(date);
+  const presets = tm ? [0, 30, 60, 120, 180, 240] : [0, 1, 2, 3, 5, 8];
+  openModal(`<h3>${mdLabel(date)} に${tm ? "やれる時間" : "やれる件数"}</h3>
     <div class="row" style="margin-bottom:16px">
-      ${[0, 30, 60, 120, 180, 240].map((v) => `<button class="btn small" data-act="dayQuick" data-date="${date}" data-v="${v}">${v === 0 ? "休み" : fmtMin(v)}</button>`).join("")}
+      ${presets.map((v) => `<button class="btn small" data-act="dayQuick" data-date="${date}" data-v="${v}">${v === 0 ? "休み" : fmtCost(v)}</button>`).join("")}
     </div>
     <div class="row">
-      <input type="number" id="dayMin" value="${cur}" min="0" step="10" data-enter="daySave" data-date="${date}"><span class="dim">分</span>
+      <input type="number" id="dayMin" value="${cur}" min="0" step="${tm ? 10 : 1}" data-enter="daySave" data-date="${date}"><span class="dim">${tm ? "分" : "件"}</span>
       <button class="btn primary" data-act="daySave" data-date="${date}">保存</button>
-      ${isOv ? `<button class="btn" data-act="dayReset" data-date="${date}">いつもの${fmtMin(w)}に戻す</button>` : ""}
+      ${isOv ? `<button class="btn" data-act="dayReset" data-date="${date}">いつもの${fmtCost(w)}に戻す</button>` : ""}
     </div>`);
 }
 
@@ -1234,18 +1292,22 @@ function buildAiPrompt(userText) {
     milestones: S.milestones.filter((m) => m.date >= today || S.tasks.some((t) => t.milestoneId === m.id && pendingOf(t) > 0))
       .map((m) => ({ id: m.id, subjectId: m.subjectId, title: m.title, date: m.date, kind: m.kind })),
     tasks: S.tasks.filter((t) => pendingOf(t) > 0)
-      .map((t) => ({ id: t.id, subjectId: t.subjectId, milestoneId: t.milestoneId, title: t.title, estMin: t.estMin, remainingMin: pendingOf(t) })),
+      .map((t) => ({ id: t.id, subjectId: t.subjectId, milestoneId: t.milestoneId, title: t.title,
+                     ...(timeMode() ? { estMin: t.estMin, remainingMin: pendingOf(t) } : {}) })),
     capacity: {
-      weekly: S.capacity.weekly,
-      overrides: Object.fromEntries(Object.entries(S.capacity.overrides).filter(([d]) => d >= today)),
+      mode: timeMode() ? "minutes-per-day" : "tasks-per-day",
+      weekly: timeMode() ? S.capacity.weekly : S.capacity.weeklyTasks,
+      overrides: Object.fromEntries(Object.entries(ovMapNow()).filter(([d]) => d >= today)),
     },
     plannerWarnings: P.warnings,
   };
+  const unit = timeMode() ? "分" : "件";
   return `あなたは大学生の学習計画コーチ。スタディプランナー「ゆるスケ」のAIアドバイザーとして応答する。
+このアプリは今 **${timeMode() ? "時間モード（1日にやれる分数で配分）" : "タスクモード（1日にやれる件数で配分。時間の見積もりは扱わない）"}** で動いている。
 状態JSONと計画エンジンの警告を読み、次を返すこと:
 - advice: 日本語で2〜4文の、現実的で具体的な助言。精神論ではなく数字に基づく。
-- capacityChanges: 特定の日の勉強時間(分)の上書き提案（例: 締切前日は増やす、疲労している週は減らす）。不要なら空配列。
-- taskChanges: タスクの見積もり分数(newEstMin)の調整提案。不要なら空配列。
+- capacityChanges: 特定の日にやれる量(${unit})の上書き提案（例: 締切前日は増やす、疲労している週は減らす）。minutesフィールドに${unit}数を入れる。不要なら空配列。
+- taskChanges: ${timeMode() ? "タスクの見積もり分数(newEstMin)の調整提案。不要なら空配列。" : "タスクモードでは使わない。必ず空配列。"}
 ルール:
 - タスクの完了状態・締切日は変更できない（提案しても無視される）。
 - 提案は控えめに。本当に必要な変更だけ。無理な詰め込みより「削る・減らす」提案を優先する。
@@ -1303,8 +1365,8 @@ async function aiConsult() {
       html += `<p class="small dim" style="margin:8px 0">提案された変更（承認するまで反映されません）:</p>`;
       for (const c of v.changes) {
         if (c.type === "capacity") {
-          const old = planner.capacityOn(c.date, S.capacity);
-          html += `<div class="diff">${mdLabel(c.date)} の勉強時間: <span class="old">${fmtMin(old)}</span> → <span class="new">${fmtMin(c.minutes)}</span></div>`;
+          const old = capOnToday(c.date);
+          html += `<div class="diff">${mdLabel(c.date)} に${timeMode() ? "やれる時間" : "やれる件数"}: <span class="old">${fmtCost(old)}</span> → <span class="new">${fmtCost(c.minutes)}</span></div>`;
         } else {
           const t = taskOf(c.taskId);
           html += `<div class="diff">「${esc(t ? t.title : c.taskId)}」の見積もり: <span class="old">${fmtMin(t ? t.estMin : 0)}</span> → <span class="new">${fmtMin(c.newEstMin)}</span></div>`;
@@ -1356,25 +1418,25 @@ const ACTIONS = {
     commit();
   },
   offToday() {
-    S.capacity.overrides[todayStr()] = 0;
+    ovMapNow()[todayStr()] = 0;
     commit();
     toast("今日は休み。明日以降に配り直しました 🍵");
   },
   undoOffToday() {
-    delete S.capacity.overrides[todayStr()];
+    delete ovMapNow()[todayStr()];
     commit();
   },
 
   /* 週 */
   dayEdit(d) { openDayModal(d.date); },
-  dayQuick(d) { S.capacity.overrides[d.date] = Number(d.v); closeModal(); commit(); },
+  dayQuick(d) { ovMapNow()[d.date] = Number(d.v); closeModal(); commit(); },
   daySave(d) {
     const v = Number(($("#dayMin") || {}).value);
     if (!Number.isFinite(v) || v < 0) return;
-    S.capacity.overrides[d.date] = Math.floor(v);
+    ovMapNow()[d.date] = Math.floor(v);
     closeModal(); commit();
   },
-  dayReset(d) { delete S.capacity.overrides[d.date]; closeModal(); commit(); },
+  dayReset(d) { delete ovMapNow()[d.date]; closeModal(); commit(); },
 
   /* 追加ウィザード */
   wizOpen(d) { openAddWizard(d && d.id); },
@@ -1462,9 +1524,10 @@ const ACTIONS = {
     const row = el.closest(".addrow");
     const titleEl = row.querySelector("input[type=text]");
     const title = titleEl.value.trim();
-    const rawEst = row.querySelector("input[type=number]").value;
+    const estEl = row.querySelector("input[type=number]"); // タスクモードでは存在しない
+    const rawEst = estEl ? estEl.value : "";
     const n = Number(rawEst);
-    const est = rawEst.trim() === "" || !Number.isFinite(n) ? 120 : n; // 未入力だけ既定120。0等は下のclampで5分に
+    const est = rawEst.trim() === "" || !Number.isFinite(n) ? 60 : n; // 未入力は既定60。0等は下のclampで5分に
     if (!title) { titleEl.focus(); return; }
     S.tasks.push(newTask(d.subj, d.ms, title, est));
     commit();
@@ -1478,8 +1541,8 @@ const ACTIONS = {
   },
   openBulk(d) {
     openModal(`<h3>やることをまとめて追加</h3>
-      <p class="dim small" style="margin-bottom:8px">1行に1つ。行の末尾に分を書けます（例: <b>第3章 p45-60 60</b>）。省略時は60分。範囲や小問など、そのまま書いてOKです。</p>
-      <textarea id="bulkText" rows="6" style="width:100%" placeholder="第3章 p45-60 60&#10;第4章 p61-78 60&#10;過去問2年ぶん 90"></textarea>
+      <p class="dim small" style="margin-bottom:8px">1行に1つ。範囲や小問など、そのまま書いてOKです。${timeMode() ? "行の末尾に分を書けます（例: <b>第3章 p45-60 60</b>）。省略時は60分。" : ""}</p>
+      <textarea id="bulkText" rows="6" style="width:100%" placeholder="第3章 p45-60&#10;第4章 p61-78&#10;過去問2年ぶん"></textarea>
       <div class="row" style="margin-top:12px">
         <button class="btn primary grow" data-act="bulkAdd" data-ms="${d.ms || ""}" data-subj="${d.subj}">追加する</button>
       </div>`);
@@ -1576,7 +1639,7 @@ const ACTIONS = {
   aiSend() { aiConsult(); },
   aiApply() {
     for (const c of (aiPendingChanges || [])) {
-      if (c.type === "capacity") S.capacity.overrides[c.date] = c.minutes;
+      if (c.type === "capacity") ovMapNow()[c.date] = c.minutes;
       if (c.type === "estMin") { const t = taskOf(c.taskId); if (t) t.estMin = c.newEstMin; }
     }
     aiPendingChanges = null;
@@ -1602,7 +1665,12 @@ document.addEventListener("change", (e) => {
   if (chg === "semName") { S.semester.name = v.trim(); commit(); }
   if (chg === "semStart") { S.semester.start = v; commit(); }
   if (chg === "semEnd") { S.semester.end = v; commit(); }
-  if (chg === "weekly") { const n = Math.max(0, Number(v) | 0); S.capacity.weekly[el.dataset.dow] = n; commit(); }
+  if (chg === "weekly") {
+    const n = Math.max(0, Number(v) | 0);
+    (timeMode() ? S.capacity.weekly : S.capacity.weeklyTasks)[el.dataset.dow] = n;
+    commit();
+  }
+  if (chg === "timeMode") { S.settings.timeMode = !!el.checked; commit(); toast(el.checked ? "時間で配ります" : "件数で配ります（時間の入力は不要）"); }
   if (chg === "boundary") { S.settings.dayBoundaryHour = Number(v); commit(); }
   if (chg === "gemModel") { S.settings.geminiModel = v; commit(); }
 });
@@ -1620,12 +1688,14 @@ try {
   /* 古い上書き（過去日のoverrides）は起動時に掃除して肥大化を防ぐ */
   (function cleanupOverrides() {
     const today = todayStr();
-    const keep = {};
-    for (const [d, v] of Object.entries(S.capacity.overrides)) if (d >= today) keep[d] = v;
-    if (Object.keys(keep).length !== Object.keys(S.capacity.overrides).length) {
-      S.capacity.overrides = keep;
-      store.save(S);
+    let changed = false;
+    for (const key of ["overrides", "overridesTasks"]) {
+      const src = S.capacity[key] || {};
+      const keep = {};
+      for (const [d, v] of Object.entries(src)) if (d >= today) keep[d] = v;
+      if (Object.keys(keep).length !== Object.keys(src).length) { S.capacity[key] = keep; changed = true; }
     }
+    if (changed) store.save(S);
   })();
   render();
 } catch (err) {

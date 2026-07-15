@@ -35,8 +35,11 @@ function check(label, ok, detail = "") {
 // ---------- fixtures ----------
 
 const CAP120 = { weekly: { mon: 120, tue: 120, wed: 120, thu: 120, fri: 120, sat: 120, sun: 120 }, overrides: {} };
+// タスクモード用: 1日2件
+const CAP_TASKS2 = { weeklyTasks: { mon: 2, tue: 2, wed: 2, thu: 2, fri: 2, sat: 2, sun: 2 }, overridesTasks: {} };
 
-function mkState({ tasks = [], milestones = [], capacity = CAP120, semesterEnd = "2026-08-07" } = {}) {
+// 既定は時間モード（既存の分ベーステスト用）。タスクモードのテストは timeMode:false を渡す
+function mkState({ tasks = [], milestones = [], capacity = CAP120, semesterEnd = "2026-08-07", timeMode = true } = {}) {
   return {
     version: 1,
     semester: { name: "2026前期", start: "2026-04-08", end: semesterEnd },
@@ -44,7 +47,7 @@ function mkState({ tasks = [], milestones = [], capacity = CAP120, semesterEnd =
     milestones,
     tasks,
     capacity: JSON.parse(JSON.stringify(capacity)),
-    settings: { dayBoundaryHour: 3, geminiKey: null },
+    settings: { dayBoundaryHour: 3, geminiKey: null, timeMode },
   };
 }
 function task(id, estMin, milestoneId = null, done = false) {
@@ -58,12 +61,12 @@ function ms(id, date, kind = "exam") {
 function assignedMinOf(plan, taskId) {
   let total = 0;
   for (const chunks of Object.values(plan.assignments)) {
-    for (const c of chunks) if (c.taskId === taskId) total += c.min;
+    for (const c of chunks) if (c.taskId === taskId) total += c.cost;
   }
   return total;
 }
 function daySum(plan, date) {
-  return (plan.assignments[date] || []).reduce((a, c) => a + c.min, 0);
+  return (plan.assignments[date] || []).reduce((a, c) => a + c.cost, 0);
 }
 function lastDayOf(plan, taskId) {
   let last = null;
@@ -124,7 +127,7 @@ const TODAY = "2026-07-13"; // 月曜
   const w = p.warnings.find((w) => w.type === "infeasible" && w.milestoneId === "m1");
   check("infeasible警告あり", !!w, JSON.stringify(p.warnings));
   // 必要500 − 可処分(7/13〜7/14: 240) = 260
-  check("shortfallMin=260", w && w.shortfallMin === 260, w && `got ${w.shortfallMin}`);
+  check("shortfall=260分", w && w.shortfall === 260, w && `got ${w.shortfall}`);
   check("減量候補を提示", w && Array.isArray(w.reduceCandidates) && w.reduceCandidates.length > 0);
   check("割当は継続（全500分）", assignedMinOf(p, "t1") + assignedMinOf(p, "t2") === 500);
 }
@@ -460,6 +463,97 @@ const TODAY = "2026-07-13"; // 月曜
   // 空
   const empty = reviewStats(mkState(), TODAY);
   check("空はtotal0・streak0・締切0", empty.total === 0 && empty.streak === 0 && empty.deadlines.length === 0);
+}
+
+// ---------- 17. タスクモード（既定）: 時間の概算なしで1日◯件ずつ配る ----------
+{
+  console.log("case: 17-task-mode");
+  const mk = (o) => mkState({ ...o, capacity: CAP_TASKS2, timeMode: false });
+
+  // 5件を1日2件ずつ → 今日2・明日2・明後日1
+  const st = mk({ milestones: [ms("m1", "2026-07-25")], tasks: [1, 2, 3, 4, 5].map((i) => task("t" + i, 0, "m1")) });
+  const p = planner.plan(st, TODAY);
+  check("timeModeフラグはfalse", p.timeMode === false);
+  check("今日は2件", (p.assignments[TODAY] || []).length === 2, JSON.stringify(p.assignments[TODAY]));
+  check("明日も2件", (p.assignments["2026-07-14"] || []).length === 2);
+  check("明後日は1件", (p.assignments["2026-07-15"] || []).length === 1);
+  check("各割当のcostは1", Object.values(p.assignments).flat().every((c) => c.cost === 1));
+  check("残りは5件", p.totalRemaining === 5, "" + p.totalRemaining);
+  check("警告なし", p.warnings.length === 0, JSON.stringify(p.warnings));
+
+  // estMinが0でも件数で配れる（＝時間の入力が要らない）
+  check("estMin未設定でも割当される", Object.values(p.assignments).flat().length === 5);
+
+  // 分割されない: 1タスクは1日にまるごと
+  const ids = Object.values(p.assignments).flat().map((c) => c.taskId);
+  check("同じタスクが複数日に跨がらない", new Set(ids).size === ids.length);
+
+  // 完了済みは配られない
+  const st2 = mk({ milestones: [ms("m1", "2026-07-25")], tasks: [task("a", 0, "m1", true), task("b", 0, "m1")] });
+  const p2 = planner.plan(st2, TODAY);
+  check("完了タスクは除外", Object.values(p2.assignments).flat().length === 1 && p2.totalRemaining === 1);
+
+  // 間に合わない: 締切7/14(明日)までに2日×2件=4件しか入らないのに6件
+  const st3 = mk({ milestones: [ms("m1", "2026-07-14")], tasks: [1, 2, 3, 4, 5, 6].map((i) => task("t" + i, 0, "m1")) });
+  const p3 = planner.plan(st3, TODAY);
+  const w3 = p3.warnings.find((x) => x.type === "infeasible");
+  check("件数ベースで破綻を警告", !!w3, JSON.stringify(p3.warnings));
+  check("不足は2件", w3 && w3.shortfall === 2, w3 && "" + w3.shortfall);
+
+  // 「今日は無理」= overridesTasks を0に
+  const capOff = JSON.parse(JSON.stringify(CAP_TASKS2));
+  capOff.overridesTasks[TODAY] = 0;
+  const p4 = planner.plan(mkState({ milestones: [ms("m1", "2026-07-25")], tasks: [task("x", 0, "m1")], capacity: capOff, timeMode: false }), TODAY);
+  check("今日0件なら今日は割当なし", !(TODAY in p4.assignments));
+  check("翌日に回る", (p4.assignments["2026-07-14"] || []).length === 1);
+
+  // 今日すでに完了した分は今日の枠から引かれる
+  const doneT = task("d1", 0, "m1", true); doneT.doneDate = TODAY;
+  const st5 = mk({ milestones: [ms("m1", "2026-07-25")], tasks: [doneT, task("n1", 0, "m1"), task("n2", 0, "m1")] });
+  const p5 = planner.plan(st5, TODAY);
+  check("今日1件完了済みなら今日はあと1件", (p5.assignments[TODAY] || []).length === 1, JSON.stringify(p5.assignments[TODAY]));
+
+  // capacityOn はモードで参照先が変わる
+  check("capacityOn(タスクモード)=2", planner.capacityOn(TODAY, CAP_TASKS2, false) === 2);
+  check("capacityOn(時間モード)=CAP120の120", planner.capacityOn(TODAY, CAP120, true) === 120);
+  // costOf
+  check("costOf(タスクモード)=1", planner.costOf(task("z", 999), false) === 1);
+  check("costOf(時間モード)=残り分", planner.costOf(task("z", 90), true) === 90);
+  check("costOf(完了)=0", planner.costOf(task("z", 90, null, true), false) === 0);
+}
+
+// ---------- 18. store: timeMode既定OFF・件数容量の既定 ----------
+{
+  console.log("case: 18-store-task-mode");
+  const d = store.migrate(null);
+  check("timeModeは既定OFF", d.settings.timeMode === false);
+  check("weeklyTasks既定あり", typeof d.capacity.weeklyTasks.mon === "number" && d.capacity.weeklyTasks.mon > 0);
+  check("overridesTasks既定は空", JSON.stringify(d.capacity.overridesTasks) === "{}");
+  const on = store.migrate({ settings: { timeMode: true } });
+  check("timeMode:trueは維持", on.settings.timeMode === true);
+  const bad = store.migrate({ settings: { timeMode: "yes" }, capacity: { weeklyTasks: { mon: "3" }, overridesTasks: { "2026-07-20": "4", nope: 1 } } });
+  check("timeModeは真偽値化", bad.settings.timeMode === true);
+  check("weeklyTasksは数値化", bad.capacity.weeklyTasks.mon === 3);
+  check("overridesTasksも数値化＋日付検証", bad.capacity.overridesTasks["2026-07-20"] === 4 && !("nope" in bad.capacity.overridesTasks));
+  // 旧データ（timeMode未設定・分だけ）は タスクモードとして開く
+  const legacy = store.migrate({ version: 1, capacity: { weekly: { mon: 90 } }, tasks: [] });
+  check("旧データはタスクモードで開く", legacy.settings.timeMode === false && legacy.capacity.weekly.mon === 90);
+}
+
+// ---------- 19. milestoneProgress: タスクモードは件数ベース ----------
+{
+  console.log("case: 19-progress-task-mode");
+  const st = mkState({
+    milestones: [ms("m1", "2026-07-25")],
+    tasks: [task("t1", 300, "m1", true), task("t2", 30, "m1"), task("t3", 30, "m1")],
+    capacity: CAP_TASKS2, timeMode: false,
+  });
+  const p = milestoneProgress(st, "m1");
+  // 件数ベースなので「見積もり300分の1件」も1件として数える
+  check("total=3件", p.total === 3, "" + p.total);
+  check("done=1件", p.done === 1, "" + p.done);
+  check("pct=33（1/3）", p.pct === 33, "" + p.pct);
+  check("doneCount=1", p.doneCount === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
