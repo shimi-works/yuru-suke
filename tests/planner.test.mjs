@@ -335,24 +335,49 @@ const TODAY = "2026-07-13"; // 月曜
 
   const bad6 = advisorValidate({ advice: "x", capacityChanges: [{ date: "2020-01-01", minutes: 60 }], taskChanges: [] }, st, TODAY);
   check("過去日への変更を拒否", !bad6.ok);
+
+  // --- タスクモード（既定）でのAI応答 ---
+  const stT = mkState({ milestones: [ms("m1", "2026-07-18")], tasks: [task("t1", 60, "m1")], capacity: CAP_TASKS2, timeMode: false });
+  // 見積もり変更は概念ごと存在しないので黙って捨てる（AIが指示を無視して返しても状態を汚さない）
+  const tmTask = advisorValidate({ advice: "x", capacityChanges: [], taskChanges: [{ taskId: "t1", newEstMin: 90 }] }, stT, TODAY);
+  check("タスクモード: taskChangesは無視される", tmTask.ok && tmTask.changes.length === 0, JSON.stringify(tmTask.changes));
+  // 容量は「件数」として妥当な範囲でのみ通す
+  const tmCapOk = advisorValidate({ advice: "x", capacityChanges: [{ date: "2026-07-14", minutes: 3 }], taskChanges: [] }, stT, TODAY);
+  check("タスクモード: 3件はOK", tmCapOk.ok && tmCapOk.changes[0].minutes === 3);
+  const tmCapNg = advisorValidate({ advice: "x", capacityChanges: [{ date: "2026-07-14", minutes: 500 }], taskChanges: [] }, stT, TODAY);
+  check("タスクモード: 500件は範囲外で拒否", !tmCapNg.ok, JSON.stringify(tmCapNg.errors));
+  // 時間モードでは500分は妥当
+  const tmMinOk = advisorValidate({ advice: "x", capacityChanges: [{ date: "2026-07-14", minutes: 500 }], taskChanges: [] }, st, TODAY);
+  check("時間モード: 500分はOK", tmMinOk.ok);
 }
 
 // ---------- 13. parseTaskLines: 一括追加の行パース ----------
 {
   console.log("case: 13-parse-task-lines");
-  const r = parseTaskLines("第3章 p45-60\n過去問 90\n\n  序論を書く 30分  \n第4章 p61-78 60", 120);
+  // 末尾の分の切り出しは時間モードのみ（第3引数）
+  const r = parseTaskLines("第3章 p45-60\n過去問 90\n\n  序論を書く 30分  \n第4章 p61-78 60", 120, true);
   check("空行を除いて4件", r.length === 4, JSON.stringify(r));
   check("末尾分なしは既定120", r[0].title === "第3章 p45-60" && r[0].estMin === 120, JSON.stringify(r[0]));
   check("末尾数字を分に", r[1].title === "過去問" && r[1].estMin === 90, JSON.stringify(r[1]));
   check("「分」付きも解釈", r[2].title === "序論を書く" && r[2].estMin === 30, JSON.stringify(r[2]));
   check("途中のp61-78は範囲のまま末尾60が分", r[3].title === "第4章 p61-78" && r[3].estMin === 60, JSON.stringify(r[3]));
-  check("空文字は空配列", parseTaskLines("", 120).length === 0);
-  check("全角空白区切りも解釈", parseTaskLines("演習　45", 120)[0].estMin === 45);
-  check("5分未満は5に丸め", parseTaskLines("小問 1", 120)[0].estMin === 5);
-  check("明示的な0も5に丸め（既定に化けない）", parseTaskLines("小問 0", 60)[0].estMin === 5, JSON.stringify(parseTaskLines("小問 0", 60)[0]));
-  check("0分表記も5", parseTaskLines("小問 0分", 60)[0].estMin === 5);
-  check("上限1440でクランプ", parseTaskLines("巨大 9999", 60)[0].estMin === 1440);
-  check("単独\\rの改行も分割", parseTaskLines("A 30\rB 40", 60).length === 2);
+  check("空文字は空配列", parseTaskLines("", 120, true).length === 0);
+  check("全角空白区切りも解釈", parseTaskLines("演習　45", 120, true)[0].estMin === 45);
+  check("5分未満は5に丸め", parseTaskLines("小問 1", 120, true)[0].estMin === 5);
+  check("明示的な0も5に丸め（既定に化けない）", parseTaskLines("小問 0", 60, true)[0].estMin === 5, JSON.stringify(parseTaskLines("小問 0", 60, true)[0]));
+  check("0分表記も5", parseTaskLines("小問 0分", 60, true)[0].estMin === 5);
+  check("上限1440でクランプ", parseTaskLines("巨大 9999", 60, true)[0].estMin === 1440);
+  check("単独\\rの改行も分割", parseTaskLines("A 30\rB 40", 60, true).length === 2);
+
+  // タスクモード（既定）: 末尾の数字はタイトルの一部。黙って食わない
+  const tmOff = parseTaskLines("過去問 2019\n小問 3\n第3章 p45-60 60", 60, false);
+  check("タスクモード: 「過去問 2019」はそのままタイトル", tmOff[0].title === "過去問 2019", JSON.stringify(tmOff[0]));
+  check("タスクモード: 「小問 3」もそのまま", tmOff[1].title === "小問 3", JSON.stringify(tmOff[1]));
+  check("タスクモード: 末尾60も食わない", tmOff[2].title === "第3章 p45-60 60", JSON.stringify(tmOff[2]));
+  check("タスクモード: estMinは既定のまま", tmOff.every((x) => x.estMin === 60));
+  // 時間モードなら同じ入力で分として切り出す（対比）
+  const tmOn = parseTaskLines("過去問 2019", 60, true);
+  check("時間モード: 「過去問 2019」は分として解釈", tmOn[0].title === "過去問" && tmOn[0].estMin === 1440, JSON.stringify(tmOn[0]));
 }
 
 // ---------- 14. buildICS: カレンダーエクスポート ----------

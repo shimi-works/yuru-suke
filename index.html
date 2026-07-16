@@ -459,6 +459,9 @@ function advisorValidate(resp, state, today) {
   if (!resp || typeof resp !== "object" || Array.isArray(resp)) {
     return { ok: false, errors: ["応答が読み取れませんでした"], advice: "", changes: [] };
   }
+  // 単位も許可される変更もモードで変わる。タスクモードでは「見積もり分」という概念自体が無い
+  const timeMode = !!(state && state.settings && state.settings.timeMode);
+  const MAX_CAP = timeMode ? 1440 : 20; // 1日にやれる量の上限（分 / 件）
   const errors = [];
   const changes = [];
   const advice = typeof resp.advice === "string" ? resp.advice : "";
@@ -474,8 +477,8 @@ function advisorValidate(resp, state, today) {
       continue;
     }
     const min = Number(c.minutes);
-    if (!Number.isInteger(min) || min < 0 || min > 1440) {
-      errors.push("可処分時間が範囲外です: " + c.date + " → " + c.minutes);
+    if (!Number.isInteger(min) || min < 0 || min > MAX_CAP) {
+      errors.push("1日にやれる量が範囲外です: " + c.date + " → " + c.minutes);
       continue;
     }
     changes.push({ type: "capacity", date: c.date, minutes: min });
@@ -485,6 +488,8 @@ function advisorValidate(resp, state, today) {
       errors.push("存在しないタスクへの変更です: " + (c && c.taskId));
       continue;
     }
+    // タスクモードでは見積もりを扱わない。AIが指示を無視して返してきても黙って捨てる
+    if (!timeMode) continue;
     if (!("newEstMin" in c)) continue; // 見積もり以外の書き換え指示は適用しない（許可フィールド制限）
     const est = Number(c.newEstMin);
     if (!Number.isInteger(est) || est < 5 || est > 6000) {
@@ -506,17 +511,20 @@ function clampMin(m) {
   return Math.min(1440, n);
 }
 
-// 複数行テキスト → やること配列。各行の末尾に「 60」や「 60分」があれば見積もり分、なければ既定。
-// 「第3章 p45-60 60」→ {title:"第3章 p45-60", estMin:60} のように、末尾トークンだけを分数として解釈する。
-function parseTaskLines(text, defaultMin) {
+// 複数行テキスト → やること配列。
+// 末尾の「 60」「 60分」を見積もりとして切り出すのは **時間モードのときだけ**。
+// タスクモード（既定）で解釈すると「過去問 2019」「小問 3」のようなタイトルの数字を黙って食ってしまい、
+// 「時間の入力は不要」という約束を破ることになる。タスクモードでは行全体がそのままタイトル。
+function parseTaskLines(text, defaultMin, timeMode) {
   const out = [];
   for (const raw of String(text).split(/\r\n|\r|\n/)) { // 単独\r(旧Mac)も改行として扱う
     const line = raw.trim();
     if (!line) continue;
-    const m = line.match(/^(.*[^\s　])[\s　]+(\d{1,4})\s*分?$/); // 末尾の分数を分離（前にタイトルが残る場合のみ）
-    let title, est;
-    if (m) { title = m[1].trim(); est = Number(m[2]); } // 「0分」も明示指定として尊重（clampMinで5に）
-    else { title = line; est = defaultMin; }
+    let title = line, est = defaultMin;
+    if (timeMode) {
+      const m = line.match(/^(.*[^\s　])[\s　]+(\d{1,4})\s*分?$/); // 末尾の分数を分離（前にタイトルが残る場合のみ）
+      if (m) { title = m[1].trim(); est = Number(m[2]); } // 「0分」も明示指定として尊重（clampMinで5に）
+    }
     out.push({ title, estMin: clampMin(est) });
   }
   return out;
@@ -1489,7 +1497,7 @@ const ACTIONS = {
   qaAdd() {
     const m = msOf(qaMsId);
     if (!m) { toast("追加先の締切を選んでください"); return; }
-    const items = parseTaskLines(($("#qaText") || {}).value || "", 60);
+    const items = parseTaskLines(($("#qaText") || {}).value || "", 60, timeMode());
     if (!items.length) { toast("やることを入力してください"); return; }
     for (const it of items) S.tasks.push(newTask(m.subjectId, m.id, it.title, it.estMin));
     closeModal(); commit();
@@ -1521,7 +1529,7 @@ const ACTIONS = {
     const msId = uid("m");
     S.milestones.push({ id: msId, subjectId: subjId, title, date, kind: wizKind });
     const bulk = (($("#wizTasks") || {}).value || "").trim();
-    const items = bulk ? parseTaskLines(bulk, 60) : makeTemplateTasks(wizKind, title);
+    const items = bulk ? parseTaskLines(bulk, 60, timeMode()) : makeTemplateTasks(wizKind, title);
     for (const it of items) S.tasks.push(newTask(subjId, msId, it.title, it.estMin));
     closeModal();
     VIEW = "today"; // 成果（今日やること）をすぐ見せて流れを理解してもらう
@@ -1591,7 +1599,7 @@ const ACTIONS = {
     commit();
   },
   bulkAdd(d) {
-    const items = parseTaskLines(($("#bulkText") || {}).value || "", 60);
+    const items = parseTaskLines(($("#bulkText") || {}).value || "", 60, timeMode());
     if (!items.length) { toast("追加するものがありません"); return; }
     for (const it of items) S.tasks.push(newTask(d.subj, d.ms, it.title, it.estMin));
     closeModal(); commit();
