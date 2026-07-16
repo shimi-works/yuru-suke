@@ -165,6 +165,11 @@ nav button.on{background:var(--accent); color:#0f1115; border-color:var(--accent
 .seg-btn.on{background:var(--accent); color:#0f1115; font-weight:700}
 .wsubj.on, .qams.on{background:var(--accent); color:#0f1115; border-color:var(--accent)}
 .qams.on .dim{color:#0f1115; opacity:.7}
+
+.bl-list{display:flex; flex-direction:column; gap:6px}
+.blrow{display:flex; align-items:center; gap:8px}
+.blb{color:var(--dim); font-size:15px; line-height:1}
+.blin{flex:1; min-width:0}
 .steps{counter-reset:step; text-align:left; max-width:280px; margin:0 auto 16px}
 .steps li{list-style:none; position:relative; padding:6px 0 6px 34px; color:var(--text)}
 .steps li::before{counter-increment:step; content:counter(step); position:absolute; left:0; top:6px;
@@ -518,7 +523,9 @@ function clampMin(m) {
 function parseTaskLines(text, defaultMin, timeMode) {
   const out = [];
   for (const raw of String(text).split(/\r\n|\r|\n/)) { // 単独\r(旧Mac)も改行として扱う
-    const line = raw.trim();
+    // 箇条書きを貼り付けたときの行頭マーカーは飾りなので落とす。
+    // ただし数字は落とさない（「2019」のような中身を食わないため。記号のみ・"-"は空白必須）
+    const line = raw.trim().replace(/^[・•‣]\s*/, "").replace(/^[-*＊]\s+/, "").trim();
     if (!line) continue;
     let title = line, est = defaultMin;
     if (timeMode) {
@@ -1232,11 +1239,53 @@ function openAddWizard(preselectSubjId) {
       </div>
     </div>
     <div class="wstep"><div class="wlabel">4. やること（あとでOK）</div>
-      <textarea id="wizTasks" rows="3" style="width:100%" placeholder="1行に1つ（例: 第3章 p45-60）&#10;空欄なら、種類に合わせた叩き台が自動で入ります"></textarea>
-      <p class="dim small" style="margin-top:6px">${timeMode() ? "行の末尾に分を書けます（例: 第3章 p45-60 60）" : "時間の入力は不要です。締切までに自動で振り分けます"}</p>
+      ${bulletList("wizList", "第3章 p45-60")}
+      <p class="dim small" style="margin-top:6px">空欄なら、種類に合わせた叩き台が自動で入ります。${timeMode() ? "行の末尾に分を書けます（例: 第3章 60）" : ""}</p>
     </div>
     <button class="btn primary" style="width:100%" data-act="wizSubmit">これで追加する</button>`);
 }
+
+/* ---------- 箇条書き入力（1行＝1項目。Enterで次の行） ---------- */
+// テキストエリアに改行で書かせるより、素直な箇条書きのほうが手が止まらない
+const BL_ROW = `<span class="blb">・</span><input type="text" class="blin" data-enter="blEnter"><button class="xbtn" data-act="blDel" title="この行を消す">×</button>`;
+function bulletRow(placeholder = "") {
+  return `<div class="blrow"><span class="blb">・</span>
+    <input type="text" class="blin" data-enter="blEnter" placeholder="${esc(placeholder)}">
+    <button class="xbtn" data-act="blDel" title="この行を消す">×</button></div>`;
+}
+function bulletList(id, placeholder) {
+  return `<div class="bl-list" id="${id}">${bulletRow(placeholder)}${bulletRow()}${bulletRow()}</div>
+    <button class="btn small" style="margin-top:8px" data-act="blAdd" data-list="${id}">＋ 行を増やす</button>`;
+}
+function newBulletRow() {
+  const row = document.createElement("div");
+  row.className = "blrow";
+  row.innerHTML = BL_ROW;
+  return row;
+}
+function collectBulletLines(id) {
+  const list = document.getElementById(id);
+  if (!list) return "";
+  return [...list.querySelectorAll(".blin")].map((i) => i.value).filter((v) => v.trim()).join("\n");
+}
+// 複数行を貼り付けたら、行ごとに箇条書きへ展開する（シラバスのコピペを1手で取り込む）
+document.addEventListener("paste", (e) => {
+  const input = e.target.closest && e.target.closest(".blin");
+  if (!input) return;
+  const text = ((e.clipboardData || window.clipboardData) || { getData: () => "" }).getData("text") || "";
+  if (!/\r?\n/.test(text)) return; // 単一行はそのまま普通に貼り付け
+  const lines = text.split(/\r\n|\r|\n/).map((s) => s.trim()).filter(Boolean);
+  if (lines.length === 0) return;
+  e.preventDefault();
+  input.value = lines[0];
+  let cur = input.closest(".blrow");
+  for (const line of lines.slice(1)) {
+    const row = newBulletRow();
+    row.querySelector(".blin").value = line;
+    cur.after(row);
+    cur = row;
+  }
+});
 
 // クイック追加: 今日ビューから、締切を選んでやることを何行でも一気に足す
 let qaMsId = null;
@@ -1253,9 +1302,9 @@ function openQuickAdd() {
     <div class="wstep"><div class="wlabel">どの試験・レポートの？</div>
       <div class="row" style="flex-wrap:wrap">${chips}</div>
     </div>
-    <div class="wstep"><div class="wlabel">やること（1行に1つ）</div>
-      <textarea id="qaText" rows="4" style="width:100%" placeholder="第3章 p45-60&#10;第4章 p61-78&#10;過去問2年ぶん"></textarea>
-      <p class="dim small" style="margin-top:6px">${timeMode() ? "行の末尾に分を書けます（例: 第3章 60）" : "時間の入力は不要。締切までに自動で振り分けます"}</p>
+    <div class="wstep"><div class="wlabel">やること</div>
+      ${bulletList("qaList", "第3章 p45-60")}
+      <p class="dim small" style="margin-top:6px">Enterで次の行へ。${timeMode() ? "行の末尾に分を書けます（例: 第3章 60）" : "時間の入力は不要。締切までに自動で振り分けます"}</p>
     </div>
     <button class="btn primary" style="width:100%" data-act="qaAdd">追加する</button>`);
 }
@@ -1494,6 +1543,27 @@ const ACTIONS = {
   },
   dayReset(d) { delete ovMapNow()[d.date]; closeModal(); commit(); },
 
+  /* 箇条書き入力 */
+  blEnter(d, el) { // Enterで次の行を作って続けて書ける
+    const row = el.closest(".blrow");
+    const next = newBulletRow();
+    row.after(next);
+    next.querySelector(".blin").focus();
+  },
+  blDel(d, el) {
+    const row = el.closest(".blrow");
+    const list = row.parentElement;
+    if (list.querySelectorAll(".blrow").length <= 1) { row.querySelector(".blin").value = ""; return; }
+    row.remove();
+  },
+  blAdd(d) {
+    const list = document.getElementById(d.list);
+    if (!list) return;
+    const row = newBulletRow();
+    list.appendChild(row);
+    row.querySelector(".blin").focus();
+  },
+
   /* クイック追加 */
   qaOpen() { openQuickAdd(); },
   qaPick(d) {
@@ -1503,7 +1573,7 @@ const ACTIONS = {
   qaAdd() {
     const m = msOf(qaMsId);
     if (!m) { toast("追加先の締切を選んでください"); return; }
-    const items = parseTaskLines(($("#qaText") || {}).value || "", 60, timeMode());
+    const items = parseTaskLines(collectBulletLines("qaList"), 60, timeMode());
     if (!items.length) { toast("やることを入力してください"); return; }
     for (const it of items) S.tasks.push(newTask(m.subjectId, m.id, it.title, it.estMin));
     closeModal(); commit();
@@ -1534,7 +1604,7 @@ const ACTIONS = {
     const title = (($("#wizTitle") || {}).value || "").trim() || KIND_LABEL[wizKind];
     const msId = uid("m");
     S.milestones.push({ id: msId, subjectId: subjId, title, date, kind: wizKind });
-    const bulk = (($("#wizTasks") || {}).value || "").trim();
+    const bulk = collectBulletLines("wizList").trim();
     const items = bulk ? parseTaskLines(bulk, 60, timeMode()) : makeTemplateTasks(wizKind, title);
     for (const it of items) S.tasks.push(newTask(subjId, msId, it.title, it.estMin));
     closeModal();
@@ -1605,7 +1675,7 @@ const ACTIONS = {
     commit();
   },
   bulkAdd(d) {
-    const items = parseTaskLines(($("#bulkText") || {}).value || "", 60, timeMode());
+    const items = parseTaskLines(collectBulletLines("bulkList"), 60, timeMode());
     if (!items.length) { toast("追加するものがありません"); return; }
     for (const it of items) S.tasks.push(newTask(d.subj, d.ms, it.title, it.estMin));
     closeModal(); commit();
@@ -1613,8 +1683,8 @@ const ACTIONS = {
   },
   openBulk(d) {
     openModal(`<h3>やることをまとめて追加</h3>
-      <p class="dim small" style="margin-bottom:8px">1行に1つ。範囲や小問など、そのまま書いてOKです。${timeMode() ? "行の末尾に分を書けます（例: <b>第3章 p45-60 60</b>）。省略時は60分。" : ""}</p>
-      <textarea id="bulkText" rows="6" style="width:100%" placeholder="第3章 p45-60&#10;第4章 p61-78&#10;過去問2年ぶん"></textarea>
+      <p class="dim small" style="margin-bottom:8px">Enterで次の行へ。範囲や小問など、そのまま書いてOKです。${timeMode() ? "行の末尾に分を書けます（例: <b>第3章 p45-60 60</b>）。省略時は60分。" : ""}</p>
+      ${bulletList("bulkList", "第3章 p45-60")}
       <div class="row" style="margin-top:12px">
         <button class="btn primary grow" data-act="bulkAdd" data-ms="${d.ms || ""}" data-subj="${d.subj}">追加する</button>
       </div>`);

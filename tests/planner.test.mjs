@@ -378,6 +378,18 @@ const TODAY = "2026-07-13"; // 月曜
   // 時間モードなら同じ入力で分として切り出す（対比）
   const tmOn = parseTaskLines("過去問 2019", 60, true);
   check("時間モード: 「過去問 2019」は分として解釈", tmOn[0].title === "過去問" && tmOn[0].estMin === 1440, JSON.stringify(tmOn[0]));
+
+  // 箇条書きを貼り付けたときの行頭マーカーは落とす（飾りなので）
+  const bul = parseTaskLines("・第3章\n• 第4章\n- 第5章\n* 第6章", 60, false);
+  check("行頭の・を落とす", bul[0].title === "第3章", JSON.stringify(bul[0]));
+  check("行頭の•を落とす", bul[1].title === "第4章", JSON.stringify(bul[1]));
+  check("行頭の- を落とす", bul[2].title === "第5章", JSON.stringify(bul[2]));
+  check("行頭の* を落とす", bul[3].title === "第6章", JSON.stringify(bul[3]));
+  // 数字や、マーカーに見えるが中身であるものは残す
+  const keep = parseTaskLines("1. 序論を書く\n-30点の範囲\n2019年度の過去問", 60, false);
+  check("番号付きは落とさない（中身かもしれない）", keep[0].title === "1. 序論を書く", JSON.stringify(keep[0]));
+  check("空白なしの-は落とさない", keep[1].title === "-30点の範囲", JSON.stringify(keep[1]));
+  check("数字始まりはそのまま", keep[2].title === "2019年度の過去問", JSON.stringify(keep[2]));
 }
 
 // ---------- 14. buildICS: カレンダーエクスポート ----------
