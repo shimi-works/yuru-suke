@@ -12,6 +12,9 @@
 
 ## このプロジェクト固有のルール（重要）
 
+- **既定は「ただのタスク管理」。時間の入力を強要しない**（2026-07-12 本人判断）: `settings.timeMode` は既定OFF。OFFのときUIに分を出さない・分の入力欄を作らない。時間で管理したい人だけ設定でONにする追加機能。時間ベースの記録・集計はこのアプリの土俵ではない（Studyplusと被る／強制系機能に引きずられる）
+- **plannerは「コスト」抽象で2モードを1つのアルゴリズムに統一**: タスクモード=コスト1・容量は件数(`weeklyTasks`/`overridesTasks`)・分割なし／時間モード=コストは残り分・容量は分(`weekly`/`overrides`)・自動分割。新しい表示や配分を足すときは必ず両モードを確認する
+- **モード別のフィールドを混ぜない**: 分は `weekly`/`overrides`、件数は `weeklyTasks`/`overridesTasks`。UIからは `timeMode()` / `fmtCost()` / `capOnToday()` / `ovMapNow()` を使い、直接 `S.capacity.overrides` を触らない
 - **設計原則「再計画はボタンではなく常時」を崩さない**: 割当（assignments）は保存せず、開くたびに planner が状態から導出する。割当を保存するコードを書かない（driftの温床）
 - **planner / store / advisorValidate / parseTaskLines / buildICS は純関数のまま維持**: `// ==PLANNER-START==`〜`==UTIL-END==` のマーカーで区切られたブロックはDOM・localStorage 非依存を保つ。`tests/planner.test.mjs` がこのブロックを抽出してNodeで実行する
 - **やること＝タスクがチェックリストの実体**: 締切(milestone)の下のタスク群がチェックリスト。専用のサブ項目データ構造は持たない（一情報一箇所）。締切種類別の初期タスクは `makeTemplateTasks`
