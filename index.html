@@ -163,7 +163,8 @@ nav button.on{background:var(--accent); color:#0f1115; border-color:var(--accent
 .seg-btn{flex:1; padding:9px 0; background:var(--panel2); color:var(--dim); border-right:1px solid var(--line)}
 .seg-btn:last-child{border-right:none}
 .seg-btn.on{background:var(--accent); color:#0f1115; font-weight:700}
-.wsubj.on{background:var(--accent); color:#0f1115; border-color:var(--accent)}
+.wsubj.on, .qams.on{background:var(--accent); color:#0f1115; border-color:var(--accent)}
+.qams.on .dim{color:#0f1115; opacity:.7}
 .steps{counter-reset:step; text-align:left; max-width:280px; margin:0 auto 16px}
 .steps li{list-style:none; position:relative; padding:6px 0 6px 34px; color:var(--text)}
 .steps li::before{counter-increment:step; content:counter(step); position:absolute; left:0; top:6px;
@@ -255,7 +256,8 @@ const planner = (() => {
         const m = t.milestoneId ? msById.get(t.milestoneId) : null;
         const raw = m && isDateStr(m.date) ? m.date : semEnd;
         return { id: t.id, est: costOf(t, timeMode), milestoneId: m ? m.id : null,
-                 deadline: raw < today ? today : raw, rawDeadline: raw };
+                 deadline: raw < today ? today : raw, rawDeadline: raw,
+                 snoozeUntil: isDateStr(t.snoozeUntil) ? t.snoozeUntil : null };
       })
       .filter((p) => p.est > 0);
 
@@ -311,21 +313,24 @@ const planner = (() => {
     const lastDeadline = queue.reduce((a, p) => (p.deadline > a ? p.deadline : a), today);
     const horizon = semEnd > lastDeadline ? semEnd : lastDeadline;
     const assignments = {};
-    let qi = 0;
-    for (let d = today; d <= horizon && qi < queue.length; d = addDays(d, 1)) {
+    let left = queue.length;
+    for (let d = today; d <= horizon && left > 0; d = addDays(d, 1)) {
       let cap = capOn(d);
-      while (cap > 0 && qi < queue.length) {
-        const t = queue[qi];
+      // 後回し(snoozeUntil)のタスクはその日まで飛ばすため、先頭固定ではなく走査して埋める
+      for (const t of queue) {
+        if (cap <= 0) break;
+        if (t.remain <= 0) continue;
+        if (t.snoozeUntil && t.snoozeUntil > d) continue; // 「後回し」中はまだ配らない
         // 細切れ回避は時間モードのみ（タスクモードはコスト1なので分割自体が起きない）
         if (timeMode && cap < MIN_CHUNK_MIN && t.remain > cap) break;
         const chunk = Math.min(cap, t.remain);
         (assignments[d] = assignments[d] || []).push({ taskId: t.id, cost: chunk });
         cap -= chunk;
         t.remain -= chunk;
-        if (t.remain === 0) qi++;
+        if (t.remain === 0) left--;
       }
     }
-    const leftover = queue.slice(qi).filter((t) => t.remain > 0);
+    const leftover = queue.filter((t) => t.remain > 0);
     if (leftover.length) {
       warnings.push({ type: "overflow", taskIds: leftover.map((t) => t.id),
                       total: leftover.reduce((a, t) => a + t.remain, 0) });
@@ -389,6 +394,8 @@ const store = (() => {
       title: String(t.title || ""), estMin: Math.max(0, t.estMin | 0),
       done: !!t.done, doneDate: t.doneDate ? String(t.doneDate) : null,
       doneLog: isObj(t.doneLog) ? { ...t.doneLog } : {},
+      // 「後回し」の解除日。不正な値は落として通常どおり配る
+      snoozeUntil: /^\d{4}-\d{2}-\d{2}$/.test(String(t.snoozeUntil || "")) ? String(t.snoozeUntil) : null,
     }));
     const cap = isObj(s.capacity) ? s.capacity : {};
     out.capacity = { weekly: {}, overrides: {}, weeklyTasks: {}, overridesTasks: {} };
@@ -649,7 +656,7 @@ function makeTemplateTasks(kind, msTitle) {
 }
 function newTask(subjId, msId, title, estMin) {
   return { id: uid("t"), subjectId: subjId, milestoneId: msId || null,
-           title, estMin: clampMin(estMin), done: false, doneDate: null, doneLog: {} };
+           title, estMin: clampMin(estMin), done: false, doneDate: null, doneLog: {}, snoozeUntil: null };
 }
 function downloadFile(text, mime, filename) {
   const blob = new Blob([text], { type: mime });
@@ -814,6 +821,7 @@ function renderToday() {
         </div>
         ${tm ? `<span class="tmin">${fmtMin(c.cost)}</span>` : ""}
         ${tm && remain > c.cost ? `<button class="xbtn" data-act="finishTask" data-id="${t.id}" title="タスク全体を完了にする">全部✔</button>` : ""}
+        <button class="xbtn" data-act="snooze" data-id="${t.id}" title="これだけ明日以降にまわす">→明日</button>
       </div>`;
     }
   }
@@ -831,6 +839,11 @@ function renderToday() {
       </div>`;
     }
     html += `</div>`;
+  }
+
+  // どの画面からでも1タップでやることを足せるように（登録の手数を最小に）
+  if (S.milestones.length > 0) {
+    html += `<button class="btn" style="width:100%; margin-bottom:16px" data-act="qaOpen">＋ やることを追加</button>`;
   }
 
   const upcoming = S.milestones
@@ -1211,6 +1224,28 @@ function openAddWizard(preselectSubjId) {
     <button class="btn primary" style="width:100%" data-act="wizSubmit">これで追加する</button>`);
 }
 
+// クイック追加: 今日ビューから、締切を選んでやることを何行でも一気に足す
+let qaMsId = null;
+function openQuickAdd() {
+  const mss = S.milestones.filter((m) => planner.isDateStr(m.date))
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+  if (mss.length === 0) { openAddWizard(); return; } // 締切が無いならウィザードへ
+  if (!mss.some((m) => m.id === qaMsId)) qaMsId = mss[0].id;
+  const chips = mss.map((m) => {
+    const subj = subjOf(m.subjectId);
+    return `<button class="chip tap qams ${qaMsId === m.id ? "on" : ""}" data-act="qaPick" data-id="${m.id}">${subj ? esc(subj.name) + " " : ""}${esc(m.title)} <span class="dim">${mdLabel(m.date)}</span></button>`;
+  }).join("");
+  openModal(`<h3>やることを追加</h3>
+    <div class="wstep"><div class="wlabel">どの試験・レポートの？</div>
+      <div class="row" style="flex-wrap:wrap">${chips}</div>
+    </div>
+    <div class="wstep"><div class="wlabel">やること（1行に1つ）</div>
+      <textarea id="qaText" rows="4" style="width:100%" placeholder="第3章 p45-60&#10;第4章 p61-78&#10;過去問2年ぶん"></textarea>
+      <p class="dim small" style="margin-top:6px">${timeMode() ? "行の末尾に分を書けます（例: 第3章 60）" : "時間の入力は不要。締切までに自動で振り分けます"}</p>
+    </div>
+    <button class="btn primary" style="width:100%" data-act="qaAdd">追加する</button>`);
+}
+
 function openDayModal(date) {
   const tm = timeMode();
   const dow = planner.dayOfWeek(date);
@@ -1417,6 +1452,13 @@ const ACTIONS = {
     t.done = false; t.doneDate = null;
     commit();
   },
+  snooze(d) {
+    const t = taskOf(d.id);
+    if (!t) return;
+    t.snoozeUntil = planner.addDays(todayStr(), 1); // 明日から再び配られる
+    commit();
+    toast("「" + t.title + "」を明日以降にまわしました");
+  },
   offToday() {
     ovMapNow()[todayStr()] = 0;
     commit();
@@ -1437,6 +1479,22 @@ const ACTIONS = {
     closeModal(); commit();
   },
   dayReset(d) { delete ovMapNow()[d.date]; closeModal(); commit(); },
+
+  /* クイック追加 */
+  qaOpen() { openQuickAdd(); },
+  qaPick(d) {
+    qaMsId = d.id;
+    document.querySelectorAll(".qams").forEach((b) => b.classList.toggle("on", b.dataset.id === d.id));
+  },
+  qaAdd() {
+    const m = msOf(qaMsId);
+    if (!m) { toast("追加先の締切を選んでください"); return; }
+    const items = parseTaskLines(($("#qaText") || {}).value || "", 60);
+    if (!items.length) { toast("やることを入力してください"); return; }
+    for (const it of items) S.tasks.push(newTask(m.subjectId, m.id, it.title, it.estMin));
+    closeModal(); commit();
+    toast(items.length + "件を追加しました");
+  },
 
   /* 追加ウィザード */
   wizOpen(d) { openAddWizard(d && d.id); },

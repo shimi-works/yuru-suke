@@ -556,5 +556,46 @@ const TODAY = "2026-07-13"; // 月曜
   check("doneCount=1", p.doneCount === 1);
 }
 
+// ---------- 20. snoozeUntil: 1件だけ「後回し」にできる ----------
+{
+  console.log("case: 20-snooze");
+  const mkT = (o) => mkState({ ...o, capacity: CAP_TASKS2, timeMode: false });
+
+  // 後回しにした1件は、その日までは配られない
+  const s1 = task("a", 0, "m1"); s1.snoozeUntil = "2026-07-15";
+  const st = mkT({ milestones: [ms("m1", "2026-07-25")], tasks: [s1, task("b", 0, "m1"), task("c", 0, "m1")] });
+  const p = planner.plan(st, TODAY); // TODAY=07-13
+  const idsOn = (d) => (p.assignments[d] || []).map((c) => c.taskId);
+  check("後回しaは今日に出ない", !idsOn(TODAY).includes("a"), JSON.stringify(idsOn(TODAY)));
+  check("代わりにb,cが今日", idsOn(TODAY).join(",") === "b,c", idsOn(TODAY).join(","));
+  check("aは解除日(07-15)に出る", idsOn("2026-07-15").includes("a"), JSON.stringify(p.assignments));
+  check("aも最終的に割当済み", Object.values(p.assignments).flat().some((c) => c.taskId === "a"));
+
+  // 解除日を過ぎていれば普通に配られる
+  const s2 = task("z", 0, "m1"); s2.snoozeUntil = "2026-07-01";
+  const p2 = planner.plan(mkT({ milestones: [ms("m1", "2026-07-25")], tasks: [s2] }), TODAY);
+  check("過去のsnoozeは無視", (p2.assignments[TODAY] || []).some((c) => c.taskId === "z"));
+
+  // 時間モードでも効く
+  const s3 = task("t1", 60, "m1"); s3.snoozeUntil = "2026-07-14";
+  const p3 = planner.plan(mkState({ milestones: [ms("m1", "2026-07-25")], tasks: [s3, task("t2", 60, "m1")] }), TODAY);
+  check("時間モードでも後回しは効く", !(p3.assignments[TODAY] || []).some((c) => c.taskId === "t1"), JSON.stringify(p3.assignments[TODAY]));
+  check("時間モード: 解除日に出る", (p3.assignments["2026-07-14"] || []).some((c) => c.taskId === "t1"));
+
+  // 全部後回しなら今日は空（無限ループしない）
+  const s4 = task("x", 0, "m1"); s4.snoozeUntil = "2026-07-20";
+  const p4 = planner.plan(mkT({ milestones: [ms("m1", "2026-07-25")], tasks: [s4] }), TODAY);
+  check("全部後回しなら今日は空", !(TODAY in p4.assignments));
+  check("後回しでも締切前には入る", Object.values(p4.assignments).flat().length === 1);
+
+  // store: snoozeUntilが正規化で保持され、不正値は落ちる
+  const norm = store.migrate({ tasks: [
+    { id: "n1", title: "a", snoozeUntil: "2026-07-20" },
+    { id: "n2", title: "b", snoozeUntil: "いつか" },
+  ] });
+  check("正しいsnoozeUntilは保持", norm.tasks[0].snoozeUntil === "2026-07-20");
+  check("不正なsnoozeUntilはnull", norm.tasks[1].snoozeUntil === null, JSON.stringify(norm.tasks[1]));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
