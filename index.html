@@ -808,8 +808,14 @@ function renderToday() {
       // 科目はあるが締切がまだ無い＝今日やることが出ない。ここで次の一手を明確に示す
       html += `<div class="empty">あと一歩 ―― <b>試験やレポートの締切</b>を足すと、ここに今日やることが出ます。<br><br>
         <button class="btn primary" data-act="wizOpen">＋ 試験・レポートを追加</button></div>`;
+    } else if (P.totalRemaining === 0) {
+      html += `<div class="empty">全部終わっています。おつかれさま 🎉</div>`;
+    } else if (doneEntries.length > 0) {
+      // 今日のぶんをやり切った状態。ここを素っ気なくしない（毎日続ける動機になる）
+      html += `<div class="empty"><b style="font-size:15px;color:var(--ok)">今日のぶんは終わり 🎉</b><br>
+        おつかれさま。残りは明日以降に配ってあります。</div>`;
     } else {
-      html += `<div class="empty">${P.totalRemaining === 0 ? "全部終わっています。おつかれさま 🎉" : "今日の割当はありません。"}</div>`;
+      html += `<div class="empty">今日の割当はありません。</div>`;
     }
   } else {
     for (const c of chunks) {
